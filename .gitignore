@@ -1,0 +1,22 @@
+# 运行时数据：含用户 API Key 与个人素材，绝不提交
+data/
+
+# 日志与临时文件
+app.log
+*.log
+run_stdout.log
+run_stderr.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 系统文件
+Thumbs.db
+.DS_Store
+
+# 编辑器
+.idea/
+.vscode/

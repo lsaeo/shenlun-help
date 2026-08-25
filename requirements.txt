@@ -1,0 +1,13 @@
+# 公考申论素材助手 V1 —— 依赖清单
+# 安装: pip install -r requirements.txt
+
+# 桌面 UI（窗口 + 内嵌浏览器 + 系统托盘）
+PySide6>=6.6
+
+# 本地 HTTP 服务（JSON API + 静态前端托管）
+fastapi>=0.110
+uvicorn>=0.29
+
+# 抓取与 LLM 调用
+httpx>=0.27
+beautifulsoup4>=4.12
