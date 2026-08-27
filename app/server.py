@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .pipeline import Pipeline
-from .store import THEMES, JsonStore
+from .store import THEMES, JsonStore, sucai_dir as _sucai_dir
 
 log = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
@@ -354,8 +354,7 @@ def create_app(store: JsonStore, pipeline: Pipeline) -> FastAPI:
     @app.get("/api/fanwen/list-files")
     def fanwen_list_files():
         """列出 sucai 下可解析的文件（供前端展示）。"""
-        from pathlib import Path
-        sucai_dir = Path(__file__).resolve().parent.parent / "sucai"
+        sucai_dir = _sucai_dir()
         files = []
         if sucai_dir.is_dir():
             for fn in sorted(sucai_dir.iterdir()):

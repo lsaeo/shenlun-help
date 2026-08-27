@@ -20,7 +20,7 @@ from datetime import date, datetime, timedelta
 
 from . import fetchers
 from .llm import DeepSeekClient, LLMError
-from .store import THEMES, JsonStore, today_str
+from .store import THEMES, JsonStore, sucai_dir as _sucai_dir, today_str
 
 log = logging.getLogger(__name__)
 
@@ -328,7 +328,7 @@ class Pipeline:
         if not self.llm.configured:
             return 0
         from . import docreader
-        sucai_dir = str(__import__("pathlib").Path(__file__).resolve().parent.parent / "sucai")
+        sucai_dir = str(_sucai_dir())
         try:
             articles = docreader.scan_sucai(sucai_dir)
         except Exception as e:  # noqa: BLE001

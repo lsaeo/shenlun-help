@@ -24,25 +24,27 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from .llm import DeepSeekClient
 from .pipeline import Pipeline
 from .server import create_app
-from .store import JsonStore
+from .store import JsonStore, project_root, seed_dir
 
 log = logging.getLogger(__name__)
 
 APP_NAME = "公考申论素材助手"
-BASE_DIR = Path(__file__).resolve().parent.parent
+
+BASE_DIR = project_root()
 DATA_DIR = BASE_DIR / "data"
-SEED_DIR = BASE_DIR / "seed"
+SEED_DIR = seed_dir()
 LOG_FILE = BASE_DIR / "app.log"
 
 
 def _setup_logging():
+    handlers = [logging.FileHandler(LOG_FILE, encoding="utf-8")]
+    # 打包成 windowed（无控制台）时 sys.stdout 为 None，StreamHandler 会崩
+    if sys.stdout is not None:
+        handlers.append(logging.StreamHandler())
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        handlers=[
-            logging.FileHandler(LOG_FILE, encoding="utf-8"),
-            logging.StreamHandler(),
-        ],
+        handlers=handlers,
     )
 
 
@@ -112,7 +114,10 @@ class App:
     def start_server(self):
         import uvicorn
         app = create_app(self.store, self.pipeline)
-        config = uvicorn.Config(app, host="127.0.0.1", port=self.port, log_level="warning")
+        # log_config=None: 禁用 uvicorn 自带日志配置。
+        # 打包成 windowed（无控制台）时 uvicorn 的 dictConfig 因 stdout isatty 崩溃。
+        config = uvicorn.Config(app, host="127.0.0.1", port=self.port,
+                                log_level="warning", log_config=None)
         server = uvicorn.Server(config)
 
         def _run():

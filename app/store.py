@@ -21,6 +21,7 @@ import os
 import threading
 import uuid
 from datetime import date, datetime, timedelta
+from pathlib import Path
 
 COLLECTIONS = ("hotspots", "topic_cards", "phrases", "expressions", "cases", "templates")
 DEFAULT_CONFIG = {
@@ -85,6 +86,34 @@ DEFAULT_CONFIG = {
 THEMES = ["民生", "生态", "法治", "文化", "创新", "经济", "基层治理", "青年担当"]
 # 记忆曲线间隔（天）：stage 0..7
 REVIEW_INTERVALS = [1, 2, 4, 7, 15, 30, 60, 90]
+
+
+def project_root() -> Path:
+    """项目根目录（兼容 PyInstaller 打包）。
+
+    开发: <root>/app/store.py -> <root>
+    打包: <root>/_internal/app/store.py -> <root>（exe 旁，数据目录所在）
+    """
+    here = Path(__file__).resolve()
+    if here.parent.name == "app" and here.parent.parent.name == "_internal":
+        return here.parent.parent.parent
+    return here.parent.parent
+
+
+def sucai_dir() -> Path:
+    """范文库目录（始终在 exe/项目根旁，可写）。"""
+    return project_root() / "sucai"
+
+
+def seed_dir() -> Path:
+    """种子目录：打包时在 sys._MEIPASS/seed，开发时在项目根/seed。"""
+    import sys as _sys
+    if getattr(_sys, "frozen", False):
+        meipass = Path(getattr(_sys, "_MEIPASS", project_root()))
+        cand = meipass / "seed"
+        if cand.is_dir():
+            return cand
+    return project_root() / "seed"
 
 
 def today_str() -> str:
