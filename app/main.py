@@ -21,7 +21,7 @@ from PySide6.QtGui import QAction, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
-from .llm import DeepSeekClient
+from .llm import DeepSeekClient, GeminiClient, build_llm_client
 from .pipeline import Pipeline
 from .server import create_app
 from .store import JsonStore, project_root, seed_dir
@@ -102,7 +102,7 @@ class App:
     def __init__(self):
         self.store = JsonStore(str(DATA_DIR), str(SEED_DIR))
         cfg = self.store.get_config()
-        self.llm = DeepSeekClient(cfg.get("api_key", ""), cfg.get("api_base", ""), cfg.get("model", ""))
+        self.llm = build_llm_client(cfg)
         self.pipeline = Pipeline(self.store, self.llm)
         self.port = _find_free_port()
         self.server_thread: threading.Thread | None = None

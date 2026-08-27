@@ -1,9 +1,13 @@
-"""DeepSeek LLM 客户端（OpenAI 兼容格式）。
+"""LLM 客户端（多提供商）。
 
-两个生成任务：
-  1. analyze_hotspot(news_item)  -> 结构化考点分析
-  2. generate_topic_card(theme)  -> 高频考点话题卡
+统一抽象：所有任务方法（analyze_hotspot/generate_topic_card/format_phrase/
+decompose_case/pick_hotspots/extract_expressions/parse_fanwen_template）
+在 BaseLLMClient 中定义，各子类只实现 `_chat_json(system, user) -> dict`：
 
+  - DeepSeekClient : OpenAI 兼容格式（/chat/completions）
+  - GeminiClient   : Google generateContent REST 格式
+
+所有子类输出完全一致的统一 JSON 结构，上层（流水线/前端）无感知切换。
 要求模型返回严格 JSON；解析失败自动重试一次，再失败抛错由调用方兜底。
 """
 from __future__ import annotations
@@ -32,44 +36,21 @@ def _strip_code_fence(text: str) -> str:
     return text
 
 
-class DeepSeekClient:
-    def __init__(self, api_key: str, api_base: str, model: str):
-        self.api_key = (api_key or "").strip()
-        self.api_base = (api_base or "https://api.deepseek.com").rstrip("/")
-        self.model = model or "deepseek-chat"
+def _json_from_text(text: str) -> dict:
+    """把模型返回文本解析为 JSON（剥 code fence + 重试逻辑内置）。"""
+    return json.loads(_strip_code_fence(text))
+
+
+class BaseLLMClient:
+    """所有任务方法统一实现，子类只需提供 _chat_json。"""
+
+    # 子类实现：调用模型返回 dict（严格 JSON）
+    def _chat_json(self, system: str, user: str) -> dict:
+        raise NotImplementedError
 
     @property
     def configured(self) -> bool:
-        return bool(self.api_key)
-
-    def _chat_json(self, system: str, user: str) -> dict:
-        if not self.configured:
-            raise LLMError("未配置 API Key，请在「设置」中填写")
-        url = f"{self.api_base}/chat/completions"
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "temperature": 0.7,
-            "response_format": {"type": "json_object"},
-        }
-        last_err: Exception | None = None
-        for attempt in range(2):
-            try:
-                resp = httpx.post(
-                    url,
-                    json=payload,
-                    headers={"Authorization": f"Bearer {self.api_key}"},
-                    timeout=DEFAULT_TIMEOUT,
-                )
-                resp.raise_for_status()
-                content = resp.json()["choices"][0]["message"]["content"]
-                return json.loads(_strip_code_fence(content))
-            except Exception as e:  # noqa: BLE001 —— 网络/JSON 错误统一重试一次
-                last_err = e
-        raise LLMError(f"LLM 调用失败: {last_err}")
+        return False
 
     # ---------- 任务 1：热点考点分析 ----------
 
@@ -314,3 +295,118 @@ class DeepSeekClient:
             "structure": structure,
             "killer_sentences": [str(x).strip() for x in data.get("killer_sentences", []) if str(x).strip()],
         }
+
+
+class DeepSeekClient(BaseLLMClient):
+    """OpenAI 兼容格式（/chat/completions）。"""
+
+    def __init__(self, api_key: str, api_base: str, model: str):
+        self.api_key = (api_key or "").strip()
+        self.api_base = (api_base or "https://api.deepseek.com").rstrip("/")
+        self.model = model or "deepseek-v4-flash"
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.api_key)
+
+    def _chat_json(self, system: str, user: str) -> dict:
+        if not self.configured:
+            raise LLMError("未配置 API Key，请在「设置」中填写")
+        url = f"{self.api_base}/chat/completions"
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "temperature": 0.7,
+            "response_format": {"type": "json_object"},
+        }
+        last_err: Exception | None = None
+        for attempt in range(2):
+            try:
+                resp = httpx.post(
+                    url,
+                    json=payload,
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    timeout=DEFAULT_TIMEOUT,
+                )
+                resp.raise_for_status()
+                content = resp.json()["choices"][0]["message"]["content"]
+                return _json_from_text(content)
+            except Exception as e:  # noqa: BLE001 —— 网络/JSON 错误统一重试一次
+                last_err = e
+        raise LLMError(f"LLM 调用失败: {last_err}")
+
+
+class GeminiClient(BaseLLMClient):
+    """Google Gemini generateContent REST 格式。
+
+    端点: POST {api_base}/v1beta/models/{model}:generateContent
+    请求: {"contents": [{"parts": [{"text": "..."}]}]}
+    响应: {"candidates": [{"content": {"parts": [{"text": "..."}]}}]}
+    （需要 responseMimeType=application/json 让模型输出严格 JSON）
+    """
+
+    DEFAULT_BASE = "https://generativelanguage.googleapis.com"
+
+    def __init__(self, api_key: str, model: str = "gemini-2.0-flash"):
+        self.api_key = (api_key or "").strip()
+        self.api_base = self.DEFAULT_BASE
+        self.model = model or "gemini-2.0-flash"
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.api_key)
+
+    def _chat_json(self, system: str, user: str) -> dict:
+        if not self.configured:
+            raise LLMError("未配置 Gemini API Key，请在「设置」中填写")
+        url = f"{self.api_base}/v1beta/models/{self.model}:generateContent"
+        payload = {
+            "contents": [
+                {"role": "user", "parts": [{"text": f"{system}\n\n{user}"}]},
+            ],
+            "generationConfig": {
+                "temperature": 0.7,
+                "responseMimeType": "application/json",
+            },
+        }
+        last_err: Exception | None = None
+        for attempt in range(2):
+            try:
+                resp = httpx.post(
+                    url,
+                    params={"key": self.api_key},
+                    json=payload,
+                    timeout=DEFAULT_TIMEOUT,
+                )
+                # Gemini 错误在响应体里（HTTP 4xx 也常带可读错误信息），先取 body
+                body = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+                if resp.status_code != 200:
+                    err_msg = body.get("error", {}).get("message", "") if isinstance(body, dict) else ""
+                    detail = f"HTTP {resp.status_code}"
+                    if err_msg:
+                        detail += f": {err_msg}"
+                    raise LLMError(f"Gemini 调用失败 {detail}")
+                candidates = body.get("candidates", [])
+                if not candidates:
+                    raise LLMError("Gemini 响应为空（无 candidates）")
+                parts = candidates[0].get("content", {}).get("parts", [])
+                if not parts:
+                    raise LLMError("Gemini 响应为空（无 parts）")
+                text = parts[0].get("text", "")
+                return _json_from_text(text)
+            except LLMError:
+                raise  # 业务错误（无 key/HTTP 错误）不重试，直接抛
+            except Exception as e:  # noqa: BLE001 —— 网络/JSON 解析错误重试一次
+                last_err = e
+        raise LLMError(f"Gemini 调用失败: {last_err}")
+
+
+def build_llm_client(cfg: dict) -> BaseLLMClient:
+    """按 ai_provider 配置构建 LLM 客户端。"""
+    provider = cfg.get("ai_provider", "deepseek")
+    if provider == "gemini":
+        return GeminiClient(cfg.get("gemini_api_key", ""), cfg.get("gemini_model", "gemini-2.0-flash"))
+    return DeepSeekClient(cfg.get("api_key", ""), cfg.get("api_base", ""), cfg.get("model", ""))

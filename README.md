@@ -48,7 +48,11 @@ python run.py
 
 ## 使用前必做
 
-在应用「设置」页填写 **DeepSeek API Key**（或兼容 OpenAI 格式的其他服务），否则 AI 生成不可用，只能手动录入。
+在应用「设置」页配置 AI 提供商（二选一）：
+- **DeepSeek**：填写 API Key（默认模型 `deepseek-v4-flash`）
+- **Google Gemini**：填写 Gemini API Key（Google AI Studio 免费申请，默认 `gemini-2.0-flash`）
+
+不配置 Key 则 AI 生成不可用（热点分析/话题卡/范文解析），但本地内容（语段库/表达库/拆解树）可正常浏览。
 
 ## 目录结构
 

@@ -147,20 +147,41 @@
   <section id="panel-settings" class="panel">
     <div class="settings-card">
       <h2>AI 配置</h2>
-      <label>API Key
-        <input id="cfg-key" type="password" placeholder="sk-...">
-      </label>
-      <label>API 地址
-        <input id="cfg-base" type="text">
-      </label>
-      <label>模型
-        <input id="cfg-model" type="text">
-      </label>
-      <label>AI 提供商（更多提供商开发中）
-        <select id="cfg-provider" style="padding:9px 12px">
+      <label>AI 提供商
+        <select id="cfg-provider" style="padding:9px 12px" onchange="toggleProviderConfig()">
           <option value="deepseek">DeepSeek API</option>
+          <option value="gemini">Google Gemini</option>
         </select>
       </label>
+      <div id="cfg-block-deepseek">
+        <label>DeepSeek API Key
+          <input id="cfg-key" type="password" placeholder="sk-...">
+        </label>
+        <label>API 地址
+          <input id="cfg-base" type="text">
+        </label>
+        <label>模型
+          <input id="cfg-model" type="text" list="ds-models" placeholder="deepseek-v4-flash">
+          <datalist id="ds-models">
+            <option value="deepseek-v4-flash">DeepSeek V4 Flash（推荐）</option>
+            <option value="deepseek-v4-pro">DeepSeek V4 Pro（更强更贵）</option>
+          </datalist>
+        </label>
+      </div>
+      <div id="cfg-block-gemini" class="hidden">
+        <label>Gemini API Key（Google AI Studio 申请）
+          <input id="cfg-gemini-key" type="password" placeholder="AIza...">
+        </label>
+        <label>Gemini 模型
+          <input id="cfg-gemini-model" type="text" list="gm-models" placeholder="gemini-2.0-flash">
+          <datalist id="gm-models">
+            <option value="gemini-2.0-flash">Gemini 2.0 Flash（免费额度推荐）</option>
+            <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+            <option value="gemini-2.5-pro">Gemini 2.5 Pro（更强，非免费）</option>
+          </datalist>
+        </label>
+        <p class="hint">模型可自由输入自定义值（如新版模型名）。Key 在 <a href="https://aistudio.google.com/apikey" target="_blank">Google AI Studio</a> 免费申请。</p>
+      </div>
       <h2>每日更新</h2>
       <label>更新时间
         <input id="cfg-time" type="time">

@@ -45,13 +45,28 @@ class Pipeline:
         self.store = store
         self.llm = llm
         self._running = False
+        self._last_provider = getattr(llm, "model", "")  # 用于变更检测
 
     @property
     def running(self) -> bool:
         return self._running
 
+    def refresh_client(self):
+        """按当前 config 的 ai_provider 重建 LLM 客户端（设置切换后生效）。"""
+        from .llm import build_llm_client
+        cfg = self.store.get_config()
+        provider = cfg.get("ai_provider", "deepseek")
+        # provider 或对应 key 变化才重建
+        sig = provider + "|" + (
+            cfg.get("gemini_api_key", "") if provider == "gemini" else cfg.get("api_key", "")
+        )
+        if sig != self._last_provider:
+            self.llm = build_llm_client(cfg)
+            self._last_provider = sig
+
     def run_daily(self, target_date: str | None = None, progress=None) -> dict:
         """跑一天：抓新闻 + 生成话题卡 + 搜集语段。target_date 默认今天；非今天只做话题卡和语段。"""
+        self.refresh_client()
         if self._running:
             return {"ok": False, "error": "已有流水线正在运行"}
         self._running = True

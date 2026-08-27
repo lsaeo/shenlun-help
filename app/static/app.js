@@ -1007,10 +1007,13 @@ async function runDecompose() {
 /* ================= 设置 ================= */
 async function loadSettings() {
   const cfg = await api("/api/config");
+  $("#cfg-provider").value = cfg.ai_provider || "deepseek";
   $("#cfg-key").value = cfg.api_key || "";
   $("#cfg-base").value = cfg.api_base || "https://api.deepseek.com";
   $("#cfg-model").value = cfg.model || "deepseek-v4-flash";
-  $("#cfg-provider").value = cfg.ai_provider || "deepseek";
+  $("#cfg-gemini-key").value = cfg.gemini_api_key || "";
+  $("#cfg-gemini-model").value = cfg.gemini_model || "gemini-2.0-flash";
+  toggleProviderConfig();
   $("#cfg-time").value = cfg.update_time || "07:00";
   $("#cfg-hot").value = cfg.daily_hotspots || 5;
   $("#cfg-cards").value = cfg.daily_cards || 5;
@@ -1024,12 +1027,19 @@ async function loadSettings() {
   $("#cfg-font-emph").value = cfg.font_emphasis ?? 16;
   $("#cfg-hint").textContent = `最近更新：${cfg.last_update_date || "从未"}；语段素材源：${(cfg.phrase_sources || []).map(s => s.name).join("、") || "未配置"}`;
 }
+function toggleProviderConfig() {
+  const p = $("#cfg-provider").value;
+  $("#cfg-block-deepseek").classList.toggle("hidden", p !== "deepseek");
+  $("#cfg-block-gemini").classList.toggle("hidden", p !== "gemini");
+}
 async function saveSettings() {
   const data = {
+    ai_provider: $("#cfg-provider").value || "deepseek",
     api_key: $("#cfg-key").value.trim(),
     api_base: $("#cfg-base").value.trim() || "https://api.deepseek.com",
     model: $("#cfg-model").value.trim() || "deepseek-v4-flash",
-    ai_provider: $("#cfg-provider").value || "deepseek",
+    gemini_api_key: $("#cfg-gemini-key").value.trim(),
+    gemini_model: $("#cfg-gemini-model").value.trim() || "gemini-2.0-flash",
     update_time: $("#cfg-time").value || "07:00",
     daily_hotspots: Math.max(1, Math.min(20, Number($("#cfg-hot").value) || 5)),
     daily_cards: Math.max(1, Math.min(20, Number($("#cfg-cards").value) || 5)),

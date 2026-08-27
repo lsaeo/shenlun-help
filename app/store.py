@@ -29,6 +29,8 @@ DEFAULT_CONFIG = {
     "api_base": "https://api.deepseek.com",
     "model": "deepseek-v4-flash",  # 2026-07-24 起旧名 deepseek-chat 停用，迁移到 V4
     "ai_provider": "deepseek",
+    "gemini_api_key": "",
+    "gemini_model": "gemini-2.0-flash",
     "update_time": "07:00",
     "daily_hotspots": 5,
     "daily_cards": 5,
