@@ -104,11 +104,21 @@
   <section id="panel-framework" class="panel">
     <div class="fw-head">
       <h2>申论总体框架</h2>
+      <button id="fw-edit-tree" class="btn">✏️ 编辑拆解</button>
       <button id="fw-decompose" class="btn accent">🤖 AI 拆解案例</button>
+      <button id="fw-fanwen" class="btn accent">📄 范文模板</button>
     </div>
     <div class="fw-layout">
       <div id="fw-theme-nav" class="fw-nav"></div>
       <div id="fw-content" class="fw-content"></div>
+    </div>
+    <div id="fanwen-panel" class="fanwen-panel hidden">
+      <div class="fw-head" style="margin-top:16px">
+        <h2>📄 优秀范文 → 模板</h2>
+        <button id="fw-fanwen-fetch" class="btn accent">🔍 抓取范文候选</button>
+        <button id="fw-fanwen-manual" class="btn">＋ 手动粘贴</button>
+      </div>
+      <div id="fanwen-list" class="card-list"></div>
     </div>
   </section>
 
@@ -151,6 +161,15 @@
       </label>
       <label>每日语段搜集条数（0=关闭）
         <input id="cfg-phrases" type="number" min="0" max="10">
+      </label>
+      <label>每日表达提炼条数（0=关闭）
+        <input id="cfg-expr" type="number" min="0" max="10">
+      </label>
+      <label>每日案例搜集条数（0=关闭）
+        <input id="cfg-cases" type="number" min="0" max="10">
+      </label>
+      <label>范文抓取节奏（天/次）
+        <input id="cfg-fanwen" type="number" min="1" max="30">
       </label>
       <label>每日随机抽查条数
         <input id="cfg-random" type="number" min="0" max="20">

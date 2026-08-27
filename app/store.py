@@ -22,7 +22,7 @@ import threading
 import uuid
 from datetime import date, datetime, timedelta
 
-COLLECTIONS = ("hotspots", "topic_cards", "phrases", "expressions", "cases")
+COLLECTIONS = ("hotspots", "topic_cards", "phrases", "expressions", "cases", "templates")
 DEFAULT_CONFIG = {
     "api_key": "",
     "api_base": "https://api.deepseek.com",
@@ -31,27 +31,30 @@ DEFAULT_CONFIG = {
     "daily_hotspots": 5,
     "daily_cards": 5,
     "daily_phrases": 3,
+    "daily_expressions": 3,
+    "daily_cases": 2,
     "catchup_limit": 3,
     "daily_random": 3,
+    "fanwen_interval_days": 3,
     "font_base": 14,
     "font_emphasis": 16,
     "sources": [
         {
-            "name": "人民日报要闻",
-            "kind": "html",
-            "url": "https://www.people.com.cn/",
-            "keywords": [],
-        },
-        {
             "name": "中国政府网要闻",
-            "kind": "html",
-            "url": "https://www.gov.cn/yaowen/liebiao/",
+            "kind": "yaowen",
+            "url": "https://www.gov.cn/",
             "keywords": [],
         },
         {
-            "name": "新华网要闻",
-            "kind": "html",
-            "url": "http://www.news.cn/politics/",
+            "name": "新华网时政",
+            "kind": "yaowen",
+            "url": "https://www.news.cn/politics/",
+            "keywords": [],
+        },
+        {
+            "name": "人民日报要闻",
+            "kind": "yaowen",
+            "url": "https://www.people.com.cn/",
             "keywords": [],
         },
     ],
@@ -65,7 +68,18 @@ DEFAULT_CONFIG = {
             "url": "http://m.offcn.com/gjgwy/2021/1221/81828.html",
         },
     ],
+    "expr_sources": [
+        {
+            "name": "申论规范词（中公）",
+            "url": "http://www.offcn.com/gwy/2021/0716/77199.html",
+        },
+        {
+            "name": "申论高频金句（华图）",
+            "url": "https://www.huatu.com/gwy/ziliao/sl/slfw/",
+        },
+    ],
     "last_update_date": None,
+    "last_fanwen_date": None,
 }
 THEMES = ["民生", "生态", "法治", "文化", "创新", "经济", "基层治理", "青年担当"]
 # 记忆曲线间隔（天）：stage 0..7
@@ -94,8 +108,10 @@ class JsonStore:
             "phrases": os.path.join(data_dir, "phrases.json"),
             "expressions": os.path.join(data_dir, "expressions.json"),
             "cases": os.path.join(data_dir, "cases.json"),
+            "templates": os.path.join(data_dir, "templates.json"),
             "topics": os.path.join(data_dir, "topics.json"),
             "review": os.path.join(data_dir, "review.json"),
+            "fanwen": os.path.join(data_dir, "fanwen.json"),
         }
         self._cache: dict[str, object] = {}
         self._seed_dir = seed_dir
@@ -131,6 +147,8 @@ class JsonStore:
                 self._cache["review"] = {"items": [], "progress": {}}
             elif "items" not in self._cache["review"]:
                 self._cache["review"]["items"] = []
+            if not isinstance(self._cache["fanwen"], list):
+                self._cache["fanwen"] = []
             self._save_all()
 
     def _load_seed(self, name: str):
@@ -292,6 +310,34 @@ class JsonStore:
             self._cache["topics"].append(entry)
             self._save("topics")
             return copy.deepcopy(entry)
+
+    # ---------- 范文候选（3 选 1 审核流） ----------
+
+    def list_fanwen_candidates(self) -> list[dict]:
+        with self._lock:
+            return copy.deepcopy(self._cache.get("fanwen", []))
+
+    def save_fanwen_candidates(self, candidates: list[dict]):
+        """保存范文候选（覆盖式，保留未审核的）。"""
+        with self._lock:
+            self._cache["fanwen"] = candidates
+            self._save("fanwen")
+            return copy.deepcopy(candidates)
+
+    def confirm_fanwen(self, candidate_id: str) -> dict | None:
+        """确认某篇候选：标记 confirmed，返回该候选供解析。"""
+        with self._lock:
+            for c in self._cache.get("fanwen", []):
+                if c.get("id") == candidate_id:
+                    c["confirmed"] = True
+                    c["confirm_date"] = today_str()
+                    self._save("fanwen")
+                    return copy.deepcopy(c)
+        return None
+
+    def last_fanwen_date(self) -> str | None:
+        with self._lock:
+            return self._cache["config"].get("last_fanwen_date")
 
     # ---------- 复习系统 ----------
 

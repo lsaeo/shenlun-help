@@ -240,3 +240,77 @@ class DeepSeekClient:
             "金句": str(data.get("金句", "")).strip(),
             "angles": [str(x).strip() for x in data.get("angles", []) if str(x).strip()],
         }
+
+    # ---------- 任务 6：表达提炼（素材 → 规范词/好词/平易词） ----------
+
+    EXPR_SYSTEM = (
+        "你是一名资深的公务员考试申论教研专家，负责从素材文本中提炼申论表达词汇。"
+        "只输出严格 JSON，不要输出任何多余文字。JSON 字段固定为："
+        '{"expressions": [{"text": string, "kind": string, "theme": string数组, "example": string}]}。'
+        "要求："
+        "1. 从给定文本中提炼 2~4 个值得积累的申论表达；"
+        "2. kind 只能是这三个之一：规范词（如「责任意识不足」「城乡融合发展」）、"
+        "好词（如「共建共治共享」「绣花功夫」）、平易词（如「钱袋子」「烟火气」）；"
+        "3. theme 从这些值中选（1~2 个）：民生、生态、法治、文化、创新、经济、基层治理、青年担当；"
+        "4. example 给一句使用例句；"
+        "5. 若文本中没有值得提炼的表达，输出 {\"expressions\": []}。"
+    )
+
+    def extract_expressions(self, raw_text: str) -> list[dict]:
+        """从素材段落中提炼表达词。"""
+        user = f"请从下面素材中提炼申论表达：\n{raw_text[:1200]}"
+        data = self._chat_json(self.EXPR_SYSTEM, user)
+        out = []
+        for e in data.get("expressions", []) or []:
+            text = str(e.get("text", "")).strip()
+            if not text or len(text) > 20:
+                continue
+            kind = str(e.get("kind", "")).strip()
+            if kind not in ("规范词", "好词", "平易词"):
+                continue
+            out.append({
+                "text": text,
+                "kind": [kind],
+                "theme": [str(x).strip() for x in e.get("theme", []) if str(x).strip()][:2],
+                "example": str(e.get("example", "")).strip(),
+            })
+        return out
+
+    # ---------- 任务 7：范文 → 结构化模板 ----------
+
+    TEMPLATE_SYSTEM = (
+        "你是一名资深的公务员考试申论教研专家，负责把一篇优秀申论范文解析成结构化模板。"
+        "只输出严格 JSON，不要输出任何多余文字。JSON 字段固定为："
+        '{"title": string, "theme": string数组, "structure": '
+        '[{"part": string, "role": string, "how": string, "pattern": string, "excerpt": string}], '
+        '"killer_sentences": string数组}。'
+        "要求："
+        "1. title：范文标题；theme：适用申论主题（1~2 个，从 民生、生态、法治、文化、创新、"
+        "经济、基层治理、青年担当 中选）；"
+        "2. structure：按段落顺序拆解 4~7 段，每段：part（段落功能名，如 开头/分论点一/结尾）、"
+        "role（这段在文章中起什么作用，30 字内）、how（这段是怎么写的/写法要点，50 字内）、"
+        "pattern（可套用的句式模板，把具体内容替换为 ____）、excerpt（原文对应段落摘录，100 字内）；"
+        "3. killer_sentences：全文 2~3 句最值得背诵的金句。"
+    )
+
+    def parse_fanwen_template(self, title: str, content: str) -> dict:
+        """把范文解析成结构化模板。"""
+        user = f"请解析这篇申论范文：\n标题：{title}\n正文：\n{content[:3000]}"
+        data = self._chat_json(self.TEMPLATE_SYSTEM, user)
+        structure = []
+        for s in data.get("structure", []) or []:
+            if not str(s.get("part", "")).strip():
+                continue
+            structure.append({
+                "part": str(s.get("part", "")).strip(),
+                "role": str(s.get("role", "")).strip(),
+                "how": str(s.get("how", "")).strip(),
+                "pattern": str(s.get("pattern", "")).strip(),
+                "excerpt": str(s.get("excerpt", "")).strip(),
+            })
+        return {
+            "title": str(data.get("title", "")).strip() or title,
+            "theme": [str(x).strip() for x in data.get("theme", []) if str(x).strip()][:3],
+            "structure": structure,
+            "killer_sentences": [str(x).strip() for x in data.get("killer_sentences", []) if str(x).strip()],
+        }

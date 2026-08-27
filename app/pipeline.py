@@ -57,7 +57,8 @@ class Pipeline:
         self._running = True
         target = target_date or today_str()
         cfg = self.store.get_config()
-        result = {"date": target, "hotspots": 0, "cards": 0, "phrases": 0, "errors": []}
+        result = {"date": target, "hotspots": 0, "cards": 0, "phrases": 0,
+                  "expressions": 0, "cases": 0, "errors": []}
         # 已存在内容（用于去重，避免同日重复生成）
         existing_hot_titles = {it.get("title", "") for it in self.store.list_all("hotspots")}
         existing_card_topics = {it.get("topic", "") for it in self.store.list_all("topic_cards")}
@@ -142,14 +143,40 @@ class Pipeline:
                     log.exception("语段搜集异常")
                     result["errors"].append(f"语段搜集失败：{e}")
 
-            # 4) 更新 last_update_date：只有真正生成了内容才推进，
+            # 3.5) 表达搜集：素材页 → AI 提炼 → 去重 → 草稿
+            expr_count = cfg.get("daily_expressions", 3)
+            if expr_count > 0:
+                try:
+                    result["expressions"] = self._collect_expressions(
+                        cfg.get("expr_sources", []), expr_count, progress)
+                except Exception as e:  # noqa: BLE001
+                    log.exception("表达搜集异常")
+                    result["errors"].append(f"表达搜集失败：{e}")
+
+            # 3.6) 案例搜集：素材页 → AI 拆解 → 去重 → 草稿
+            case_count = cfg.get("daily_cases", 2)
+            if case_count > 0:
+                try:
+                    result["cases"] = self._collect_cases(
+                        cfg.get("phrase_sources", []), case_count, progress)
+                except Exception as e:  # noqa: BLE001
+                    log.exception("案例搜集异常")
+                    result["errors"].append(f"案例搜集失败：{e}")
+
+            # 4) 范文候选：按节奏抓取（仅当天，不进补拉）
+            if target == today_str():
+                self._maybe_fetch_fanwen(cfg, progress, result)
+
+            # 5) 更新 last_update_date：只有真正生成了内容才推进，
             #    否则启动补拉机制会误以为当天已更新而跳过。
-            if result["hotspots"] + result["cards"] + result["phrases"] > 0:
+            if (result["hotspots"] + result["cards"] + result["phrases"]
+                    + result["expressions"] + result["cases"]) > 0:
                 cfg = self.store.get_config()
                 if not cfg["last_update_date"] or cfg["last_update_date"] < target:
                     self.store.set_config({"last_update_date": target})
             result["ok"] = not result["errors"] or (
-                result["hotspots"] + result["cards"] + result["phrases"]) > 0
+                result["hotspots"] + result["cards"] + result["phrases"]
+                + result["expressions"] + result["cases"]) > 0
             return result
         finally:
             self._running = False
@@ -200,6 +227,123 @@ class Pipeline:
                 except LLMError as e:
                     log.warning("语段改稿失败: %s", e)
         return added
+
+    def _collect_expressions(self, sources: list[dict], limit: int, progress=None) -> int:
+        """素材页 → AI 提炼表达词 → 去重 → 草稿。返回新增条数。"""
+        if not self.llm.configured:
+            log.warning("未配置 API Key，跳过表达搜集")
+            return 0
+        existing = {e.get("text", "") for e in self.store.list_all("expressions")}
+        added = 0
+        for source in sources:
+            if added >= limit:
+                break
+            try:
+                candidates = fetchers.fetch_phrase_source(source)
+            except Exception as e:  # noqa: BLE001
+                log.warning("表达素材页抓取失败 %s: %s", source.get("name"), e)
+                continue
+            for cand in candidates:
+                if added >= limit:
+                    break
+                if progress:
+                    progress(f"表达提炼：{cand[:15]}…")
+                try:
+                    exprs = self.llm.extract_expressions(cand)
+                except LLMError as e:
+                    log.warning("表达提炼失败: %s", e)
+                    continue
+                for ex in exprs:
+                    if added >= limit:
+                        break
+                    if not ex.get("text") or ex["text"] in existing:
+                        continue
+                    existing.add(ex["text"])
+                    self.store.create("expressions", {
+                        "date": today_str(),
+                        "status": "草稿",
+                        **ex,
+                        "collected": False,
+                    })
+                    added += 1
+        return added
+
+    def _collect_cases(self, sources: list[dict], limit: int, progress=None) -> int:
+        """素材页 → AI 拆解案例 → 去重 → 草稿。返回新增条数。"""
+        if not self.llm.configured:
+            log.warning("未配置 API Key，跳过案例搜集")
+            return 0
+        existing = {c.get("title", "") for c in self.store.list_all("cases")}
+        added = 0
+        for source in sources:
+            if added >= limit:
+                break
+            try:
+                candidates = fetchers.fetch_phrase_source(source)
+            except Exception as e:  # noqa: BLE001
+                log.warning("案例素材页抓取失败 %s: %s", source.get("name"), e)
+                continue
+            for cand in candidates:
+                if added >= limit:
+                    break
+                if progress:
+                    progress(f"案例拆解：{cand[:15]}…")
+                try:
+                    case = self.llm.decompose_case(cand)
+                except LLMError as e:
+                    log.warning("案例拆解失败: %s", e)
+                    continue
+                if not case.get("title") or case["title"] in existing:
+                    continue
+                existing.add(case["title"])
+                self.store.create("cases", {
+                    "date": today_str(),
+                    "status": "草稿",
+                    "description": cand,
+                    **case,
+                })
+                added += 1
+        return added
+
+    def fetch_fanwen_candidates_sync(self, limit: int = 3) -> list[dict]:
+        """手动触发：直接抓范文候选（供设置页按钮调用）。"""
+        try:
+            return fetchers.fetch_fanwen_candidates(limit=limit)
+        except Exception as e:  # noqa: BLE001
+            log.warning("手动抓范文失败: %s", e)
+            return []
+
+    def _maybe_fetch_fanwen(self, cfg: dict, progress=None, result: dict | None = None):
+        """范文候选按节奏抓取：距上次抓取 >= fanwen_interval_days 且无待审核候选时抓。"""
+        if not self.llm.configured:
+            return
+        last = self.store.last_fanwen_date()
+        interval = cfg.get("fanwen_interval_days", 3)
+        if last:
+            from datetime import datetime as _dt
+            try:
+                last_d = _dt.strptime(last, "%Y-%m-%d").date()
+                if (date.today() - last_d).days < interval:
+                    return  # 未到节奏
+            except ValueError:
+                pass
+        # 有待审核候选则不重复抓
+        pending = [c for c in self.store.list_fanwen_candidates() if not c.get("confirmed")]
+        if pending:
+            return
+        if progress:
+            progress("抓取范文候选…")
+        try:
+            cands = fetchers.fetch_fanwen_candidates(limit=3)
+            if cands:
+                self.store.save_fanwen_candidates(cands)
+                cfg = self.store.get_config()
+                self.store.set_config({"last_fanwen_date": today_str()})
+                if result is not None:
+                    result.setdefault("fanwen_candidates", len(cands))
+                log.info("范文候选抓取 %d 篇", len(cands))
+        except Exception as e:  # noqa: BLE001
+            log.warning("范文候选抓取失败: %s", e)
 
     def _pick_hotspots(self, candidates: list[dict], limit: int) -> list[dict]:
         """AI 从候选新闻中挑选重点；无 key 或失败时降级按最新日期取前 limit 条。"""

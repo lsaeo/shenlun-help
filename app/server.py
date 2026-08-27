@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import logging
 import os
 import threading
 from pathlib import Path
@@ -16,6 +17,7 @@ from pydantic import BaseModel, Field
 from .pipeline import Pipeline
 from .store import THEMES, JsonStore
 
+log = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
 
 
@@ -141,6 +143,7 @@ def create_app(store: JsonStore, pipeline: Pipeline) -> FastAPI:
         return updated
 
     # ---------- 表达库 ----------
+    # 注意：filter/locate 必须注册在 /api/expressions/{item_id} 之前
     @app.get("/api/expressions/filter")
     def filter_expressions(kind: str = "", theme: str = "", q: str = "", collected: str = ""):
         items = store.list_all("expressions")
@@ -155,6 +158,17 @@ def create_app(store: JsonStore, pipeline: Pipeline) -> FastAPI:
             items = [it for it in items if ql in str(it.get("text", "")).lower()
                      or ql in str(it.get("example", "")).lower()]
         return {"items": items}
+
+    @app.get("/api/expressions/locate")
+    def locate_expression(q: str = ""):
+        """按词精确查找表达，返回 {found, item, index} 供前端定位高亮。"""
+        if not q:
+            raise HTTPException(400, "q 不能为空")
+        items = store.list_all("expressions")
+        for i, it in enumerate(items):
+            if it.get("text") == q:
+                return {"found": True, "item": it, "index": i}
+        return {"found": False, "item": None, "index": -1}
 
     register_crud("/api/expressions", "expressions", "/api/expressions")
 
@@ -269,7 +283,108 @@ def create_app(store: JsonStore, pipeline: Pipeline) -> FastAPI:
             "hotspots": hotspots,
             "cards": cards,
             "cases": cases,
+            "templates": [t for t in store.list_all("templates")
+                          if theme in t.get("theme", [])],
         }
+
+    # ---------- 范文模板库 ----------
+    register_crud("/api/templates", "templates", "/api/templates")
+
+    @app.post("/api/templates/from-fanwen")
+    def template_from_fanwen(body: GenericBody):
+        """确认范文 → AI 解析成模板 → 存模板库。body.data: {candidate_id} 或 {title, content}。"""
+        if not pipeline.llm.configured:
+            raise HTTPException(400, "未配置 API Key，无法解析模板")
+        data = body.data
+        cid = data.get("candidate_id")
+        if cid:
+            cand = store.confirm_fanwen(cid)
+            if cand is None:
+                raise HTTPException(404, "候选不存在")
+            title, content = cand.get("title", ""), cand.get("content", "")
+            source = cand.get("url", "")
+        else:
+            title = str(data.get("title", "")).strip()
+            content = str(data.get("content", "")).strip()
+            source = str(data.get("source", "")).strip() or "手动粘贴"
+            if not title or not content:
+                raise HTTPException(400, "title/content 不能为空")
+        result = {}
+        def _run():
+            nonlocal result
+            try:
+                result = pipeline.llm.parse_fanwen_template(title, content)
+            except Exception as e:  # noqa: BLE001
+                result = {"error": str(e)}
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        t.join(timeout=240)
+        if result.get("error"):
+            raise HTTPException(502, result["error"])
+        template = store.create("templates", {
+            "title": result.get("title", title),
+            "source": source,
+            "date": None,
+            "theme": result.get("theme", []),
+            "structure": result.get("structure", []),
+            "killer_sentences": result.get("killer_sentences", []),
+        })
+        # 保存原文到 sucai/范文/
+        try:
+            import os
+            from pathlib import Path
+            from datetime import date as _d
+            fanwen_dir = Path(__file__).resolve().parent.parent / "sucai" / "范文" / _d.today().isoformat()
+            fanwen_dir.mkdir(parents=True, exist_ok=True)
+            safe = "".join(c for c in title if c not in '\\/:*?"<>|')[:30] or "范文"
+            (fanwen_dir / f"{safe}.txt").write_text(
+                f"标题：{title}\n来源：{source}\n\n{content}", encoding="utf-8")
+            template["saved_to"] = str(fanwen_dir)
+        except Exception as e:  # noqa: BLE001
+            log.info("范文保存 sucai 失败: %s", e)
+        return template
+
+    # ---------- 范文候选 ----------
+    @app.get("/api/fanwen/candidates")
+    def fanwen_candidates():
+        return {"items": store.list_fanwen_candidates()}
+
+    @app.post("/api/fanwen/fetch")
+    def fanwen_fetch():
+        """手动触发抓范文候选。"""
+        cands = pipeline.fetch_fanwen_candidates_sync()
+        if not cands:
+            raise HTTPException(502, "本次未抓到可读范文，可尝试手动粘贴")
+        store.save_fanwen_candidates(cands)
+        return {"items": cands}
+
+    @app.post("/api/fanwen/add-manual")
+    def fanwen_add_manual(body: GenericBody):
+        """手动粘贴范文作为候选。"""
+        title = str(body.data.get("title", "")).strip()
+        content = str(body.data.get("content", "")).strip()
+        if not title or not content:
+            raise HTTPException(400, "标题/内容不能为空")
+        import uuid
+        cands = store.list_fanwen_candidates()
+        cands.append({
+            "id": uuid.uuid4().hex[:8],
+            "title": title,
+            "url": "",
+            "source": "手动粘贴",
+            "content": content,
+            "confirmed": False,
+        })
+        store.save_fanwen_candidates(cands)
+        return {"items": cands}
+
+    @app.post("/api/fanwen/add-manual-remove")
+    def fanwen_remove(body: GenericBody):
+        """按 id 列表过滤候选（删除）。"""
+        ids = set(body.data.get("ids", []))
+        cands = [c for c in store.list_fanwen_candidates() if c.get("id") not in ids]
+        store.save_fanwen_candidates(cands)
+        return {"items": cands}
 
     # ---------- 配置 ----------
     @app.get("/api/config")

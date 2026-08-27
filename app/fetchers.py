@@ -240,3 +240,109 @@ def fetch_phrase_source(source: dict) -> list[str]:
         seen.add(text)
         candidates.append(text)
     return candidates
+
+
+# ================= 范文候选（必应搜索聚合） =================
+
+_SEARCH_QUERIES = [
+    "申论范文 民生 开头 结尾 完整文章",
+    "申论大作文范文 基层治理 全文",
+    "申论优秀范文 生态文明 全文 解析",
+    "申论范文 数字政府 全文",
+]
+
+
+def search_bing(query: str, limit: int = 8) -> list[dict]:
+    """必应搜索，返回 [{title, url}]。"""
+    html = _fetch(f"https://www.bing.com/search?q={query.replace(' ', '+')}")
+    soup = BeautifulSoup(html, "html.parser")
+    out = []
+    seen = set()
+    for a in soup.select("li.b_algo h2 a"):
+        title = _clean(a.get_text())
+        href = a.get("href", "")
+        if not title or len(title) < 10:
+            continue
+        if href in seen:
+            continue
+        seen.add(href)
+        out.append({"title": title, "url": href})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def fetch_article_text(url: str) -> str | None:
+    """抓取文章正文（多源尽力而为）。反爬/结构异常返回 None。"""
+    try:
+        html = _fetch(url, timeout=20)
+    except Exception:
+        return None
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "nav", "header", "footer", "aside", "form"]):
+        tag.decompose()
+    # 优先取正文容器（常见选择器）
+    container = (soup.select_one("article") or soup.select_one(".article-content")
+                 or soup.select_one("#content") or soup.select_one(".content")
+                 or soup.select_one(".rich_media_content") or soup.body)
+    if container is None:
+        return None
+    # 剔除导航/广告行
+    nav_words = ("首页", "登录", "注册", "课程", "咨询", "下载APP", "扫码", "备考", "题库",
+                 "模考", "报名", "网站导航", "联系我们", "帮助中心", "会员", "历年真题")
+    lines = []
+    for seg in container.find_all(["p", "div", "section", "h1", "h2", "h3", "li"]):
+        seg_text = _clean(seg.get_text(" ", strip=True))
+        if len(seg_text) < 12:
+            continue
+        if any(w in seg_text[:20] for w in nav_words):
+            continue
+        lines.append(seg_text)
+    text = " ".join(lines)
+    # 正文需足够长且不含登录墙特征
+    if len(text) < 300:
+        return None
+    if any(w in text for w in ("请登录", "扫码登录", "会员专享", "登录后查看")):
+        return None
+    return text
+
+
+def fetch_fanwen_candidates(limit: int = 3) -> list[dict]:
+    """必应搜索范文 → 逐条尝试抓正文，返回最多 limit 篇可读候选。
+
+    返回：[{title, url, content, source}]；反爬/抓取失败自动换下一篇。
+    """
+    import uuid
+    seen_urls = set()
+    results: list[dict] = []
+    for q in _SEARCH_QUERIES:
+        if len(results) >= limit:
+            break
+        try:
+            hits = search_bing(q, limit=limit * 3)
+        except Exception as e:
+            log.warning("必应搜索失败 %s: %s", q, e)
+            continue
+        for hit in hits:
+            if len(results) >= limit:
+                break
+            url = hit["url"]
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+            content = fetch_article_text(url)
+            if not content:
+                log.info("范文候选正文抓取失败(跳过): %s", hit["title"][:30])
+                continue
+            # 质量过滤：正文过长多为导航页，过短不可用；优先含文章结构词的
+            if len(content) > 12000 or len(content) < 400:
+                continue
+            results.append({
+                "id": uuid.uuid4().hex[:8],
+                "title": hit["title"],
+                "url": url,
+                "source": "网络范文",
+                "content": content,
+                "confirmed": False,
+            })
+    return results

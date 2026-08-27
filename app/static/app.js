@@ -647,14 +647,46 @@ async function renderFrameworkContent(theme, topics) {
   box.innerHTML = `<div class="empty">加载中…</div>`;
   const topic = (topics || []).find((t) => t.theme === theme) || { theme, dimensions: [] };
   const fw = await api(`/api/framework/${encodeURIComponent(theme)}`);
-  const dims = (topic.dimensions || []).map((d) => `
-    <div class="fw-dim">
-      <div class="fw-dim-name">${esc(d.name)}</div>
-      <div class="fw-dim-items">${(d.items || []).map((i) => `<span class="tag">${esc(i)}</span>`).join("")}</div>
-    </div>`).join("") || `<div class="hint">该主题暂无拆解维度</div>`;
+  const dims = (topic.dimensions || []).map((d, di) => `
+    <details class="fw-dim">
+      <summary>
+        <span class="fw-dim-name">${esc(d.name)}</span>
+        ${(d.items || []).map((i) => `<span class="tag">${esc(i)}</span>`).join("")}
+      </summary>
+      <div class="fw-dim-detail">
+        ${d.explain ? `<div class="fw-dim-explain">💡 ${esc(d.explain)}</div>` : ""}
+        ${(d.cases || []).length ? `
+          <div class="fw-dim-cases"><b>使用案例：</b>
+          ${d.cases.map((c) => `<div class="fw-item">· ${esc(c)}</div>`).join("")}</div>` : ""}
+      </div>
+    </details>`).join("") || `<div class="hint">该主题暂无拆解维度</div>`;
+  const tmpls = (fw.templates || []).map((t) => `
+    <div class="tmpl-card">
+      <div class="tmpl-head">
+        <b>${esc(t.title)}</b>
+        <span class="tag">${(t.theme || []).join("、")}</span>
+        <span class="tmpl-src">${esc(t.source || "")}</span>
+      </div>
+      <div class="tmpl-structure">
+        ${(t.structure || []).map((s) => `
+          <div class="tmpl-part">
+            <span class="sk-label">${esc(s.part)}</span>
+            <div class="tmpl-role">${esc(s.role)}</div>
+            <div class="tmpl-how">写法：${esc(s.how)}</div>
+            ${s.pattern ? `<div class="tmpl-pattern">句式：${esc(s.pattern)}</div>` : ""}
+            ${s.excerpt ? `<div class="tmpl-excerpt">原文：${esc(s.excerpt)}</div>` : ""}
+          </div>`).join("")}
+      </div>
+      ${(t.killer_sentences || []).length ? `
+        <div class="tmpl-killers"><b>可背金句：</b>${t.killer_sentences.map((k) => `<div class="hl-em">${esc(k)}</div>`).join("")}</div>` : ""}
+      <div class="item-actions">
+        <button class="btn small" data-act="tmpl-edit" data-id="${t.id}">编辑</button>
+        <button class="btn danger small" data-act="tmpl-delete" data-id="${t.id}">删除</button>
+      </div>
+    </div>`).join("");
   box.innerHTML = `
     <div class="fw-block">
-      <h3>📐 主题拆解</h3>
+      <h3>📐 主题拆解（可点击维度看解释）</h3>
       <div class="fw-dims">${dims}</div>
     </div>
     <div class="fw-block">
@@ -679,20 +711,33 @@ async function renderFrameworkContent(theme, topics) {
       ${fw.cases.slice(0, 6).map((c) => `<div class="fw-item">· ${esc(c.title)}</div>`).join("") || "无"}
     </div>
     <div class="fw-block">
-      <h3>🦴 文章结构骨架</h3>
-      <div class="fw-skeleton">
-        <div class="sk-item"><span class="sk-label">开头</span>亮明观点 + 引用金句/排比句（从语段库选 position=开头）</div>
-        <div class="sk-item"><span class="sk-label">分论点</span>3 个分论点：论点句（对仗）+ 素材论证（热点/案例）+ 对策</div>
-        <div class="sk-item"><span class="sk-label">结尾</span>总结升华 + 展望（用可背金句收束）</div>
-      </div>
+      <h3>🦴 范文模板库（${fw.templates.length}）</h3>
+      ${tmpls || `<div class="hint">暂无模板。点击上方「📄 范文模板」抓取/粘贴范文，确认后 AI 解析成模板。</div>`}
     </div>`;
 }
 async function actFrameworkJump(e) {
   const btn = e.target.closest("[data-jump]");
   if (!btn) return;
+  const q = btn.dataset.q || "";
+  // 双向联动：跳到表达库 → 清筛选 → 定位高亮
+  STATE.exFilters = { kind: "", theme: "", collected: false };
+  applyExprChipState();
   switchTab("expressions");
-  $("#ex-q").value = btn.dataset.q || "";
+  $("#ex-q").value = q;
   await loadExpressions();
+  // 定位高亮
+  try {
+    const loc = await api(`/api/expressions/locate?q=${encodeURIComponent(q)}`);
+    if (loc.found) {
+      const items = $$("#ex-list .expr-text");
+      const target = items.find((el) => el.textContent.trim() === q);
+      if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+        target.closest(".item").classList.add("locate-flash");
+        setTimeout(() => target.closest(".item")?.classList.remove("locate-flash"), 2500);
+      }
+    }
+  } catch (err) { /* ignore */ }
 }
 
 /* ================= 复习 ================= */
@@ -765,10 +810,201 @@ async function actReview(act, el) {
   } else if (act === "review-add") {
     await api(`/api/review/${type}/${id}/add`, { method: "POST" });
     toast("已加入复习池 ✔ 明天开始安排复习");
+    // 背完后立即移除当前卡片，列表自动上移（不重新加载整列表，避免滚动位置跳变）
+    const card = el.closest(".item");
+    if (card) {
+      card.style.opacity = "0.3";
+      card.style.transition = "opacity 0.2s";
+      setTimeout(() => {
+        card.remove();
+        // 若列表空了显示空态
+        const box = card.parentElement;
+        if (box && box.querySelectorAll(".item").length === 0 && box.id === "ph-list") {
+          box.innerHTML = `<div class="empty">暂无匹配语段。调整筛选条件或「＋ 新增语段」。</div>`;
+        }
+        if (box && box.querySelectorAll(".item").length === 0 && box.id === "hs-list") {
+          box.innerHTML = `<div class="empty">暂无热点。点击「⚡ 立即生成今日」或「＋ 手动录入」。</div>`;
+        }
+      }, 250);
+    }
   }
   await loadReviewState();
   await refreshOverview();
   if (STATE.tab === "review") await loadReview();
+}
+
+/* ================= 范文审核区 ================= */
+async function toggleFanwenPanel() {
+  const panel = $("#fanwen-panel");
+  panel.classList.toggle("hidden");
+  if (!panel.classList.contains("hidden")) await loadFanwen();
+}
+async function loadFanwen() {
+  const r = await api("/api/fanwen/candidates");
+  renderFanwen(r.items || []);
+}
+function renderFanwen(cands) {
+  const box = $("#fanwen-list");
+  if (!cands.length) {
+    box.innerHTML = `<div class="empty">暂无范文候选。点「🔍 抓取范文候选」自动搜索，或「＋ 手动粘贴」。</div>`;
+    return;
+  }
+  box.innerHTML = cands.map((c) => `
+    <div class="item">
+      <div class="item-head">
+        <div class="item-title">${esc(c.title)}</div>
+        ${c.confirmed ? `<span class="tag published">已确认</span>` : `<span class="tag draft">待审核</span>`}
+      </div>
+      <div class="item-meta">
+        <span>来源：${esc(c.source || "网络")}</span>
+        ${c.url ? `<a href="${esc(c.url)}" target="_blank">原文链接</a>` : ""}
+      </div>
+      <div class="item-body">
+        <div class="collapse">
+          <summary>📄 预览正文（点击展开，${(c.content || "").length} 字）</summary>
+          <div class="collapse-body">${esc(String(c.content || "").slice(0, 500))}${(c.content || "").length > 500 ? "…" : ""}</div>
+        </div>
+      </div>
+      <div class="item-actions">
+        ${c.confirmed ? "" : `<button class="btn primary small" data-act="fanwen-confirm" data-id="${c.id}">✅ 确认并解析成模板</button>`}
+        <button class="btn danger small" data-act="fanwen-delete" data-id="${c.id}">删除</button>
+      </div>
+    </div>`).join("");
+}
+async function actFanwen(act, id) {
+  if (act === "fanwen-confirm") {
+    toast("AI 解析模板中（约 1 分钟）…");
+    try {
+      await api("/api/templates/from-fanwen", { method: "POST", body: JSON.stringify({ data: { candidate_id: id } }) });
+      toast("✅ 模板已生成，见框架栏模板区");
+    } catch (e) {
+      toast("解析失败：" + e.message);
+    }
+    await loadFanwen();
+    if (STATE.fwTheme) loadFramework();
+  } else if (act === "fanwen-delete") {
+    const r = await api("/api/fanwen/candidates");
+    const rest = r.items.filter((c) => c.id !== id);
+    await api("/api/fanwen/add-manual-remove", { method: "POST", body: JSON.stringify({ data: { ids: rest.map((c) => c.id) } }) });
+    toast("已删除");
+    await loadFanwen();
+  }
+}
+async function fanwenFetch() {
+  toast("正在抓取范文候选（约 1 分钟）…");
+  try {
+    const r = await api("/api/fanwen/fetch", { method: "POST" });
+    toast(`抓到 ${(r.items || []).length} 篇候选，请审核`);
+  } catch (e) {
+    toast("抓取失败：" + e.message);
+  }
+  await loadFanwen();
+}
+function openFanwenManual() {
+  STATE.modal = { kind: "fanwen" };
+  $("#modal-title").textContent = "手动粘贴范文";
+  $("#modal-body").innerHTML = `
+    <label>标题 <input id="f-title" type="text" placeholder="范文标题"></label>
+    <label>正文 <textarea id="f-content" style="min-height:200px" placeholder="粘贴范文全文…"></textarea></label>`;
+  showModal();
+}
+async function saveFanwenManual() {
+  const title = $("#f-title").value.trim();
+  const content = $("#f-content").value.trim();
+  if (!title || !content) { toast("标题和正文不能为空"); return; }
+  await api("/api/fanwen/add-manual", { method: "POST", body: JSON.stringify({ data: { title, content } }) });
+  hideModal();
+  toast("已添加候选");
+  await loadFanwen();
+}
+
+/* ================= 拆解树编辑 ================= */
+function openTreeEdit() {
+  STATE.modal = { kind: "tree" };
+  $("#modal-title").textContent = `编辑拆解：${STATE.fwTheme}`;
+  const t = STATE.fwTheme;
+  const rows = () => {
+    const topic = null;
+    return api("/api/topics").then((r) => {
+      const found = (r.items || []).find((x) => x.theme === t) || { theme: t, dimensions: [] };
+      return (found.dimensions || []).map((d, i) => `
+        <div class="tree-dim-row" data-idx="${i}">
+          <input type="text" data-f="name" value="${esc(d.name)}" placeholder="维度名">
+          <input type="text" data-f="items" value="${esc((d.items || []).join("、"))}" placeholder="素材标签（顿号分隔）">
+          <input type="text" data-f="explain" value="${esc(d.explain || "")}" placeholder="解释（是什么/为什么考）">
+          <input type="text" data-f="cases" value="${esc((d.cases || []).join("；"))}" placeholder="使用案例（分号分隔）">
+          <button class="btn danger small" data-act="tree-dim-del" data-idx="${i}">✕</button>
+        </div>`).join("") || `<div class="hint">暂无维度</div>`;
+    });
+  };
+  rows().then((html) => {
+    $("#modal-body").innerHTML = `
+      <div class="tree-edit-list">${html}</div>
+      <button class="btn" id="tree-dim-add">＋ 添加维度</button>
+      <p class="hint">每行：维度名 ｜ 素材标签（顿号分隔）｜ 解释 ｜ 使用案例（分号分隔）</p>`;
+    $("#tree-dim-add").addEventListener("click", () => {
+      const list = $(".tree-edit-list");
+      const row = document.createElement("div");
+      row.className = "tree-dim-row";
+      row.innerHTML = `
+        <input type="text" data-f="name" placeholder="维度名">
+        <input type="text" data-f="items" placeholder="素材标签（顿号分隔）">
+        <input type="text" data-f="explain" placeholder="解释">
+        <input type="text" data-f="cases" placeholder="使用案例">
+        <button class="btn danger small" data-act="tree-dim-del">✕</button>`;
+      list.appendChild(row);
+    });
+    $(".tree-edit-list").addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-act=tree-dim-del]");
+      if (btn) btn.closest(".tree-dim-row").remove();
+    });
+  });
+  showModal();
+}
+async function saveTreeEdit() {
+  const dims = [];
+  $$(".tree-dim-row").forEach((row) => {
+    const name = row.querySelector('[data-f="name"]').value.trim();
+    if (!name) return;
+    const items = row.querySelector('[data-f="items"]').value.split(/[、,，]/).map((s) => s.trim()).filter(Boolean);
+    const explain = row.querySelector('[data-f="explain"]').value.trim();
+    const cases = row.querySelector('[data-f="cases"]').value.split(/[；;]/).map((s) => s.trim()).filter(Boolean);
+    dims.push({ name, items, explain, cases });
+  });
+  await api(`/api/topics/${encodeURIComponent(STATE.fwTheme)}`, { method: "PUT", body: JSON.stringify({ data: { dimensions: dims } }) });
+  hideModal();
+  toast("拆解已保存");
+  loadFramework();
+}
+
+/* ================= 模板编辑 ================= */
+async function openTemplateEdit(id) {
+  STATE.modal = { kind: "template", id };
+  const it = await api(`/api/templates/${id}`);
+  $("#modal-title").textContent = "编辑模板";
+  $("#modal-body").innerHTML = `
+    <label>标题 <input id="f-title" type="text" value="${esc(it.title || "")}"></label>
+    <label>适用主题（顿号分隔）<input id="f-theme" type="text" value="${esc((it.theme || []).join("、"))}"></label>
+    <label>可背金句（每行一句）<textarea id="f-killers" style="min-height:60px">${esc((it.killer_sentences || []).join("\n"))}</textarea></label>
+    <label>结构解析（每行一段：段落名｜作用｜写法｜可套用句式）
+      <textarea id="f-structure" style="min-height:160px">${esc((it.structure || []).map((s) =>
+        [s.part, s.role, s.how, s.pattern].join("｜")).join("\n"))}</textarea></label>`;
+  showModal();
+}
+async function saveTemplateEdit() {
+  const data = {
+    title: $("#f-title").value.trim(),
+    theme: $("#f-theme").value.split(/[、,，]/).map((s) => s.trim()).filter(Boolean),
+    killer_sentences: $("#f-killers").value.split("\n").map((s) => s.trim()).filter(Boolean),
+    structure: $("#f-structure").value.split("\n").map((line) => {
+      const [part, role, how, pattern] = line.split("｜").map((s) => (s || "").trim());
+      return { part, role, how, pattern, excerpt: "" };
+    }).filter((s) => s.part),
+  };
+  await api(`/api/templates/${STATE.modal.id}`, { method: "PUT", body: JSON.stringify({ data }) });
+  hideModal();
+  toast("模板已保存");
+  loadFramework();
 }
 
 /* ================= AI 拆解弹窗 ================= */
@@ -824,6 +1060,9 @@ async function loadSettings() {
   $("#cfg-hot").value = cfg.daily_hotspots || 5;
   $("#cfg-cards").value = cfg.daily_cards || 5;
   $("#cfg-phrases").value = cfg.daily_phrases ?? 3;
+  $("#cfg-expr").value = cfg.daily_expressions ?? 3;
+  $("#cfg-cases").value = cfg.daily_cases ?? 2;
+  $("#cfg-fanwen").value = cfg.fanwen_interval_days ?? 3;
   $("#cfg-random").value = cfg.daily_random ?? 3;
   $("#cfg-catchup").value = cfg.catchup_limit ?? 3;
   $("#cfg-font-base").value = cfg.font_base ?? 14;
@@ -839,6 +1078,9 @@ async function saveSettings() {
     daily_hotspots: Math.max(1, Math.min(20, Number($("#cfg-hot").value) || 5)),
     daily_cards: Math.max(1, Math.min(20, Number($("#cfg-cards").value) || 5)),
     daily_phrases: Math.max(0, Math.min(10, Number($("#cfg-phrases").value) || 0)),
+    daily_expressions: Math.max(0, Math.min(10, Number($("#cfg-expr").value) || 0)),
+    daily_cases: Math.max(0, Math.min(10, Number($("#cfg-cases").value) || 0)),
+    fanwen_interval_days: Math.max(1, Math.min(30, Number($("#cfg-fanwen").value) || 3)),
     daily_random: Math.max(0, Math.min(20, Number($("#cfg-random").value) || 0)),
     catchup_limit: Math.max(0, Math.min(7, Number($("#cfg-catchup").value) || 3)),
     font_base: Math.max(13, Math.min(18, Number($("#cfg-font-base").value) || 14)),
@@ -993,7 +1235,25 @@ function bindEvents() {
     }
   });
   $("#fw-decompose").addEventListener("click", openDecompose);
-  $("#fw-content").addEventListener("click", actFrameworkJump);
+  $("#fw-edit-tree").addEventListener("click", openTreeEdit);
+  $("#fw-fanwen").addEventListener("click", toggleFanwenPanel);
+  $("#fw-fanwen-fetch").addEventListener("click", fanwenFetch);
+  $("#fw-fanwen-manual").addEventListener("click", openFanwenManual);
+  $("#fw-content").addEventListener("click", (e) => {
+    if (e.target.closest("[data-jump]")) actFrameworkJump(e);
+    else if (e.target.closest("[data-act=tmpl-edit]")) {
+      openTemplateEdit(e.target.closest("[data-act=tmpl-edit]").dataset.id);
+    } else if (e.target.closest("[data-act=tmpl-delete]")) {
+      const id = e.target.closest("[data-act=tmpl-delete]").dataset.id;
+      if (confirm("删除这个模板？")) {
+        api(`/api/templates/${id}`, { method: "DELETE" }).then(() => { toast("已删除"); loadFramework(); });
+      }
+    }
+  });
+  $("#fanwen-list").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-act]");
+    if (btn) actFanwen(btn.dataset.act, btn.dataset.id);
+  });
 
   // 复习
   $("#rv-refresh").addEventListener("click", loadReview);
@@ -1018,6 +1278,9 @@ function bindEvents() {
     else if (k === "card") saveCardModal();
     else if (k === "phrase") savePhraseModal();
     else if (k === "expression") saveExprModal();
+    else if (k === "fanwen") saveFanwenManual();
+    else if (k === "tree") saveTreeEdit();
+    else if (k === "template") saveTemplateEdit();
   });
   $("#modal-mask").addEventListener("click", (e) => { if (e.target.id === "modal-mask") hideModal(); });
 }

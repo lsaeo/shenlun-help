@@ -179,9 +179,16 @@ select, input[type="date"], input[type="time"], input[type="number"] {
 }
 .fw-block h3 { font-size: var(--font-emph); margin-bottom: 8px; color: var(--primary); }
 .fw-dims { display: flex; flex-direction: column; gap: 8px; }
-.fw-dim { padding: 8px 10px; background: #f7f9fc; border-radius: 8px; }
-.fw-dim-name { font-weight: 700; font-size: var(--font-base); margin-bottom: 4px; }
+.fw-dim {
+  padding: 8px 10px; background: #f7f9fc; border-radius: 8px;
+  border: 1px solid var(--line);
+}
+.fw-dim summary { cursor: pointer; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.fw-dim-name { font-weight: 700; font-size: var(--font-base); }
 .fw-dim-items { display: flex; gap: 6px; flex-wrap: wrap; }
+.fw-dim-detail { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line); }
+.fw-dim-explain { font-size: 13px; color: #33456b; line-height: 1.7; }
+.fw-dim-cases { margin-top: 6px; font-size: 13px; color: #33456b; }
 .fw-chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .fw-phrase { font-size: 13px; line-height: 1.7; padding: 5px 0; border-bottom: 1px dashed var(--line); }
 .fw-item { font-size: 13px; padding: 4px 0; color: #3a4456; }
@@ -191,6 +198,48 @@ select, input[type="date"], input[type="time"], input[type="number"] {
   border-radius: 0 8px 8px 0; font-size: var(--font-base); line-height: 1.7;
 }
 .sk-label { font-weight: 700; color: var(--accent); margin-right: 8px; }
+
+/* 范文模板卡 */
+.tmpl-card {
+  border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-bottom: 10px;
+  background: #fbfcfe;
+}
+.tmpl-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.tmpl-head b { font-size: var(--font-emph); }
+.tmpl-src { font-size: 11px; color: var(--muted); }
+.tmpl-structure { display: flex; flex-direction: column; gap: 8px; }
+.tmpl-part {
+  padding: 8px 10px; background: #fff; border: 1px solid var(--line);
+  border-radius: 6px; font-size: 13px; line-height: 1.7;
+}
+.tmpl-role { color: #3a4456; }
+.tmpl-how { color: #6b7686; font-size: 12px; }
+.tmpl-pattern { color: #2456bd; font-size: 12px; margin-top: 2px; }
+.tmpl-excerpt { color: #8a94a6; font-size: 12px; margin-top: 2px; border-left: 2px solid var(--line); padding-left: 8px; }
+.tmpl-killers { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+
+/* 范文审核区 */
+.fanwen-panel { margin-top: 10px; }
+
+/* 拆解编辑行 */
+.tree-edit-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.tree-dim-row {
+  display: grid; grid-template-columns: 1fr 1.5fr 1.5fr 1.5fr auto; gap: 6px;
+  align-items: center;
+}
+.tree-dim-row input { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; font-size: 12px; }
+
+/* 定位高亮闪烁 */
+.locate-flash {
+  animation: locateFlash 2.5s ease;
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px rgba(232, 133, 12, 0.25) !important;
+}
+@keyframes locateFlash {
+  0% { background: #fff3e0; }
+  60% { background: #fff3e0; }
+  100% { background: var(--card); }
+}
 
 /* 复习 */
 .rv-section-title { font-size: 15px; font-weight: 700; margin: 18px 0 10px; color: var(--primary); }
