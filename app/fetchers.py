@@ -307,10 +307,39 @@ def fetch_article_text(url: str) -> str | None:
     return text
 
 
+def _is_index_page(text: str) -> bool:
+    """启发式检测索引/导航页（真题列表、范文合集导航等），避免作为范文候选。
+
+    特征：
+    1. 含 8 个以上形如「2026-04-28 [申论] …」的日期前缀条目（真题/资料索引）
+    2. 开头大段连续省份/考试类型导航名（各地考试导航）
+    3. 正文中「点击进入/立即查看/…篇」等链接引导语过多
+    """
+    if not text:
+        return True
+    # 特征 1：日期 + [栏目] 前缀重复
+    dated = re.findall(r"20\d{2}-\d{2}-\d{2}\s*\[", text)
+    if len(dated) >= 5:
+        return True
+    # 特征 2：开头 300 字内含大量省份名（导航）
+    provinces = ("山东", "江苏", "浙江", "安徽", "福建", "湖南", "湖北", "广东", "四川",
+                 "云南", "陕西", "甘肃", "新疆", "黑龙江", "吉林", "辽宁", "河北", "河南")
+    head = text[:400]
+    if sum(1 for p in provinces if p in head) >= 6:
+        return True
+    # 特征 3：链接引导语密集
+    guide_words = ("点击进入", "立即查看", "在线阅读", "下载附件", "进入专题", "查看更多", "推荐阅读")
+    if sum(1 for w in guide_words if w in text) >= 4:
+        return True
+    # 特征 4：真实范文应有完整段落（句号比例合理），纯列表多为短句
+    sentences = [s for s in re.split(r"[。！？]", text) if len(s.strip()) > 15]
+    return len(sentences) < 4
+
+
 def fetch_fanwen_candidates(limit: int = 3) -> list[dict]:
     """必应搜索范文 → 逐条尝试抓正文，返回最多 limit 篇可读候选。
 
-    返回：[{title, url, content, source}]；反爬/抓取失败自动换下一篇。
+    返回：[{title, url, content, source}]；反爬/抓取失败/索引页自动换下一篇。
     """
     import uuid
     seen_urls = set()
@@ -334,8 +363,12 @@ def fetch_fanwen_candidates(limit: int = 3) -> list[dict]:
             if not content:
                 log.info("范文候选正文抓取失败(跳过): %s", hit["title"][:30])
                 continue
-            # 质量过滤：正文过长多为导航页，过短不可用；优先含文章结构词的
+            # 质量过滤：正文过长多为导航页，过短不可用
             if len(content) > 12000 or len(content) < 400:
+                continue
+            # 索引页/导航页检测：真题列表、范文合集导航直接跳过
+            if _is_index_page(content):
+                log.info("范文候选疑似索引页(跳过): %s", hit["title"][:30])
                 continue
             results.append({
                 "id": uuid.uuid4().hex[:8],
