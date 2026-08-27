@@ -833,89 +833,43 @@ async function actReview(act, el) {
   if (STATE.tab === "review") await loadReview();
 }
 
-/* ================= 范文审核区 ================= */
+/* ================= 范文模板区（本地轮转） ================= */
 async function toggleFanwenPanel() {
   const panel = $("#fanwen-panel");
   panel.classList.toggle("hidden");
   if (!panel.classList.contains("hidden")) await loadFanwen();
 }
 async function loadFanwen() {
-  const r = await api("/api/fanwen/candidates");
-  renderFanwen(r.items || []);
-}
-function renderFanwen(cands) {
-  const box = $("#fanwen-list");
-  if (!cands.length) {
-    box.innerHTML = `<div class="empty">暂无范文候选。点「🔍 抓取范文候选」自动搜索，或「＋ 手动粘贴」。</div>`;
-    return;
-  }
-  box.innerHTML = cands.map((c) => `
-    <div class="item">
-      <div class="item-head">
-        <div class="item-title">${esc(c.title)}</div>
-        ${c.confirmed ? `<span class="tag published">已确认</span>` : `<span class="tag draft">待审核</span>`}
-      </div>
-      <div class="item-meta">
-        <span>来源：${esc(c.source || "网络")}</span>
-        ${c.url ? `<a href="${esc(c.url)}" target="_blank">原文链接</a>` : ""}
-      </div>
-      <div class="item-body">
-        <div class="collapse">
-          <summary>📄 预览正文（点击展开，${(c.content || "").length} 字）</summary>
-          <div class="collapse-body">${esc(String(c.content || "").slice(0, 500))}${(c.content || "").length > 500 ? "…" : ""}</div>
-        </div>
-      </div>
-      <div class="item-actions">
-        ${c.confirmed ? "" : `<button class="btn primary small" data-act="fanwen-confirm" data-id="${c.id}">✅ 确认并解析成模板</button>`}
-        <button class="btn danger small" data-act="fanwen-delete" data-id="${c.id}">删除</button>
-      </div>
-    </div>`).join("");
-}
-async function actFanwen(act, id) {
-  if (act === "fanwen-confirm") {
-    toast("AI 解析模板中（约 1 分钟）…");
-    try {
-      await api("/api/templates/from-fanwen", { method: "POST", body: JSON.stringify({ data: { candidate_id: id } }) });
-      toast("✅ 模板已生成，见框架栏模板区");
-    } catch (e) {
-      toast("解析失败：" + e.message);
-    }
-    await loadFanwen();
-    if (STATE.fwTheme) loadFramework();
-  } else if (act === "fanwen-delete") {
-    const r = await api("/api/fanwen/candidates");
-    const rest = r.items.filter((c) => c.id !== id);
-    await api("/api/fanwen/add-manual-remove", { method: "POST", body: JSON.stringify({ data: { ids: rest.map((c) => c.id) } }) });
-    toast("已删除");
-    await loadFanwen();
-  }
-}
-async function fanwenFetch() {
-  toast("正在抓取范文候选（约 1 分钟）…");
   try {
-    const r = await api("/api/fanwen/fetch", { method: "POST" });
-    toast(`抓到 ${(r.items || []).length} 篇候选，请审核`);
+    const r = await api("/api/fanwen/index");
+    const s = r.stats || {};
+    const files = await api("/api/fanwen/list-files");
+    $("#fanwen-stats").innerHTML =
+      `📊 本地范文：共 <b>${s.total || 0}</b> 篇 ｜ 待解析 <b class="hl-em">${s.pending || 0}</b> ｜ ` +
+      `已解析 ${s.resolved || 0} ｜ 已跳过 ${s.skipped || 0}`;
+    const fl = (files.files || []).map((f) =>
+      `<button class="btn small" data-act="fanwen-parse-file" data-path="${esc(f.path)}" data-name="${esc(f.name)}">📄 ${esc(f.name)}</button>`).join("");
+    $("#fanwen-file-list").innerHTML = fl || `<span class="hint">sucai/ 下暂无可解析文件</span>`;
+    // 展示轮转队列前若干篇状态
+    const items = r.items || [];
+    const rows = items.slice(0, 15).map((a) => {
+      const st = a.status === "已解析" ? "published" : a.status === "已跳过" ? "draft" : "";
+      return `<div class="fw-item">${statusTag(a.status || "待解析")} ${esc((a.title || "").slice(0, 40))}</div>`;
+    }).join("");
+    $("#fanwen-queue").innerHTML = rows || `<div class="hint">暂无范文索引，运行流水线后自动建立</div>`;
   } catch (e) {
-    toast("抓取失败：" + e.message);
+    $("#fanwen-stats").textContent = "加载失败：" + e.message;
   }
-  await loadFanwen();
 }
-function openFanwenManual() {
-  STATE.modal = { kind: "fanwen" };
-  $("#modal-title").textContent = "手动粘贴范文";
-  $("#modal-body").innerHTML = `
-    <label>标题 <input id="f-title" type="text" placeholder="范文标题"></label>
-    <label>正文 <textarea id="f-content" style="min-height:200px" placeholder="粘贴范文全文…"></textarea></label>`;
-  showModal();
-}
-async function saveFanwenManual() {
-  const title = $("#f-title").value.trim();
-  const content = $("#f-content").value.trim();
-  if (!title || !content) { toast("标题和正文不能为空"); return; }
-  await api("/api/fanwen/add-manual", { method: "POST", body: JSON.stringify({ data: { title, content } }) });
-  hideModal();
-  toast("已添加候选");
-  await loadFanwen();
+async function parseFanwenFile(path, name) {
+  toast(`AI 解析「${name}」中（约 1 分钟）…`);
+  try {
+    const r = await api("/api/fanwen/parse-file", { method: "POST", body: JSON.stringify({ data: { path, title: name } }) });
+    toast("✅ 模板已生成，见框架栏模板区");
+    if (STATE.fwTheme) loadFramework();
+  } catch (e) {
+    toast("解析失败：" + e.message);
+  }
 }
 
 /* ================= 拆解树编辑 ================= */
@@ -1056,6 +1010,7 @@ async function loadSettings() {
   $("#cfg-key").value = cfg.api_key || "";
   $("#cfg-base").value = cfg.api_base || "https://api.deepseek.com";
   $("#cfg-model").value = cfg.model || "deepseek-chat";
+  $("#cfg-provider").value = cfg.ai_provider || "deepseek";
   $("#cfg-time").value = cfg.update_time || "07:00";
   $("#cfg-hot").value = cfg.daily_hotspots || 5;
   $("#cfg-cards").value = cfg.daily_cards || 5;
@@ -1074,6 +1029,7 @@ async function saveSettings() {
     api_key: $("#cfg-key").value.trim(),
     api_base: $("#cfg-base").value.trim() || "https://api.deepseek.com",
     model: $("#cfg-model").value.trim() || "deepseek-chat",
+    ai_provider: $("#cfg-provider").value || "deepseek",
     update_time: $("#cfg-time").value || "07:00",
     daily_hotspots: Math.max(1, Math.min(20, Number($("#cfg-hot").value) || 5)),
     daily_cards: Math.max(1, Math.min(20, Number($("#cfg-cards").value) || 5)),
@@ -1237,8 +1193,11 @@ function bindEvents() {
   $("#fw-decompose").addEventListener("click", openDecompose);
   $("#fw-edit-tree").addEventListener("click", openTreeEdit);
   $("#fw-fanwen").addEventListener("click", toggleFanwenPanel);
-  $("#fw-fanwen-fetch").addEventListener("click", fanwenFetch);
-  $("#fw-fanwen-manual").addEventListener("click", openFanwenManual);
+  $("#fw-fanwen-refresh").addEventListener("click", loadFanwen);
+  $("#fanwen-file-list").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-act=fanwen-parse-file]");
+    if (btn) parseFanwenFile(btn.dataset.path, btn.dataset.name);
+  });
   $("#fw-content").addEventListener("click", (e) => {
     if (e.target.closest("[data-jump]")) actFrameworkJump(e);
     else if (e.target.closest("[data-act=tmpl-edit]")) {
@@ -1249,10 +1208,6 @@ function bindEvents() {
         api(`/api/templates/${id}`, { method: "DELETE" }).then(() => { toast("已删除"); loadFramework(); });
       }
     }
-  });
-  $("#fanwen-list").addEventListener("click", (e) => {
-    const btn = e.target.closest("button[data-act]");
-    if (btn) actFanwen(btn.dataset.act, btn.dataset.id);
   });
 
   // 复习
@@ -1278,7 +1233,6 @@ function bindEvents() {
     else if (k === "card") saveCardModal();
     else if (k === "phrase") savePhraseModal();
     else if (k === "expression") saveExprModal();
-    else if (k === "fanwen") saveFanwenManual();
     else if (k === "tree") saveTreeEdit();
     else if (k === "template") saveTemplateEdit();
   });

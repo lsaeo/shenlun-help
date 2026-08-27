@@ -305,45 +305,73 @@ class Pipeline:
                 added += 1
         return added
 
-    def fetch_fanwen_candidates_sync(self, limit: int = 3) -> list[dict]:
-        """手动触发：直接抓范文候选（供设置页按钮调用）。"""
+    def _resolve_fanwen_from_file(self, path: str, title: str = "") -> dict:
+        """手动/自动解析一个本地范文文件为模板。"""
+        from .docreader import read_file_text
+        content = read_file_text(path)
+        tpl = self.llm.parse_fanwen_template(title or path, content)
+        template = self.store.create("templates", {
+            "title": tpl.get("title", title or path),
+            "source": path,
+            "date": today_str(),
+            "theme": tpl.get("theme", []),
+            "structure": tpl.get("structure", []),
+            "killer_sentences": tpl.get("killer_sentences", []),
+        })
+        return template
+
+    def _parse_next_fanwen(self, cfg: dict, progress=None, result: dict | None = None) -> int:
+        """本地范文轮转：扫描 sucai 重建索引 → 解析下一篇待解析范文 → 标记已解析。
+
+        返回本次解析篇数（0 或 1）。
+        """
+        if not self.llm.configured:
+            return 0
+        from . import docreader
+        sucai_dir = str(__import__("pathlib").Path(__file__).resolve().parent.parent / "sucai")
         try:
-            return fetchers.fetch_fanwen_candidates(limit=limit)
+            articles = docreader.scan_sucai(sucai_dir)
         except Exception as e:  # noqa: BLE001
-            log.warning("手动抓范文失败: %s", e)
-            return []
+            log.warning("扫描 sucai 失败: %s", e)
+            return 0
+        # 短篇自动跳过
+        for a in articles:
+            if len(a.get("content", "")) < docreader.MIN_FANWEN_LEN:
+                a["status"] = "已跳过"
+        self.store.save_fanwen_index(articles)
+        nxt = self.store.next_fanwen_pending()
+        if nxt is None:
+            if result is not None:
+                result["fanwen_note"] = "所有范文已解析，等待新增文件"
+            return 0
+        if progress:
+            progress(f"解析范文：{nxt.get('title', '')[:20]}…")
+        try:
+            tpl = self.llm.parse_fanwen_template(
+                nxt.get("title", ""), nxt.get("content", "")[:3000])
+            self.store.create("templates", {
+                "title": tpl.get("title", nxt.get("title", "")),
+                "source": nxt.get("path", ""),
+                "date": today_str(),
+                "theme": tpl.get("theme", []),
+                "structure": tpl.get("structure", []),
+                "killer_sentences": tpl.get("killer_sentences", []),
+            })
+            self.store.mark_fanwen_status(nxt["id"], "已解析")
+            if result is not None:
+                result["fanwen_resolved"] = nxt.get("title", "")
+            log.info("范文已解析: %s", nxt.get("title", ""))
+            return 1
+        except LLMError as e:
+            log.warning("范文解析失败: %s", e)
+            # 解析失败不标记已解析，下次重试（但防止死循环：本次失败就跳过本轮）
+            if result is not None:
+                result["errors"].append(f"范文解析失败：{e}")
+            return 0
 
     def _maybe_fetch_fanwen(self, cfg: dict, progress=None, result: dict | None = None):
-        """范文候选按节奏抓取：距上次抓取 >= fanwen_interval_days 且无待审核候选时抓。"""
-        if not self.llm.configured:
-            return
-        last = self.store.last_fanwen_date()
-        interval = cfg.get("fanwen_interval_days", 3)
-        if last:
-            from datetime import datetime as _dt
-            try:
-                last_d = _dt.strptime(last, "%Y-%m-%d").date()
-                if (date.today() - last_d).days < interval:
-                    return  # 未到节奏
-            except ValueError:
-                pass
-        # 有待审核候选则不重复抓
-        pending = [c for c in self.store.list_fanwen_candidates() if not c.get("confirmed")]
-        if pending:
-            return
-        if progress:
-            progress("抓取范文候选…")
-        try:
-            cands = fetchers.fetch_fanwen_candidates(limit=3)
-            if cands:
-                self.store.save_fanwen_candidates(cands)
-                cfg = self.store.get_config()
-                self.store.set_config({"last_fanwen_date": today_str()})
-                if result is not None:
-                    result.setdefault("fanwen_candidates", len(cands))
-                log.info("范文候选抓取 %d 篇", len(cands))
-        except Exception as e:  # noqa: BLE001
-            log.warning("范文候选抓取失败: %s", e)
+        """本地轮转解析（每天一篇，随流水线触发）。"""
+        self._parse_next_fanwen(cfg, progress, result)
 
     def _pick_hotspots(self, candidates: list[dict], limit: int) -> list[dict]:
         """AI 从候选新闻中挑选重点；无 key 或失败时降级按最新日期取前 limit 条。"""

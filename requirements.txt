@@ -11,3 +11,7 @@ uvicorn>=0.29
 # 抓取与 LLM 调用
 httpx>=0.27
 beautifulsoup4>=4.12
+
+# Word 文档解析（本地范文轮转）
+python-docx>=1.1
+

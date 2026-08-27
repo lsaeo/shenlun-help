@@ -38,6 +38,11 @@ class FakeLLM:
                 "examples": ["例句"], "position": ["开头"], "theme": ["民生"],
                 "technique": ["排比"], "usage": "测试用"}
 
+    def parse_fanwen_template(self, title, content):
+        return {"title": f"模板-{title[:10]}", "theme": ["民生"],
+                "structure": [{"part": "开头", "role": "r", "how": "h", "pattern": "p", "excerpt": "e"}],
+                "killer_sentences": ["金句"]}
+
 
 class FakeFetcher:
     """模拟抓取：固定返回两条新闻。"""

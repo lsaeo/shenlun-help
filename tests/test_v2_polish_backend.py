@@ -35,18 +35,19 @@ def check(name, cond, extra=""):
     checks.append((name, cond))
     print(("PASS " if cond else "FAIL ") + name + (f"  {extra}" if extra else ""))
 
-# 范文候选（无 key 时手动添加 + 列表）
-r = httpx.post(f"{base}/api/fanwen/add-manual", json={"data": {"title": "测试范文", "content": "这是一篇测试范文内容。" * 20}})
-check("手动添加范文候选", r.status_code == 200 and len(r.json()["items"]) == 1)
-r = httpx.get(f"{base}/api/fanwen/candidates")
-check("范文候选列表", len(r.json()["items"]) == 1)
+# 范文索引（本地轮转）
+r = httpx.get(f"{base}/api/fanwen/index")
+check("范文索引接口", r.status_code == 200 and "items" in r.json() and "stats" in r.json())
+r = httpx.get(f"{base}/api/fanwen/list-files")
+check("范文文件列表", r.status_code == 200 and "files" in r.json())
 
-# 范文抓取（无 key 也能抓，不依赖 LLM；网络慢，给长超时，失败可接受）
-try:
-    r = httpx.post(f"{base}/api/fanwen/fetch", timeout=90)
-    check("范文抓取接口可达", r.status_code in (200, 502), f"status={r.status_code}")
-except Exception as e:
-    check("范文抓取接口可达", False, f"异常: {type(e).__name__}")
+# 手动粘贴 → 模板（无 key 应拒绝）
+r = httpx.post(f"{base}/api/templates/from-fanwen", json={"data": {"title": "t", "content": "c"}})
+check("粘贴解析无key拒绝", r.status_code == 400)
+
+# 手动解析本地文件（无 key 应拒绝；测试目录无文件也走 400 前）
+r = httpx.post(f"{base}/api/fanwen/parse-file", json={"data": {"path": "D:\\不存在的文件.docx"}})
+check("解析文件无key拒绝", r.status_code == 400)
 
 # 模板库 CRUD
 r = httpx.post(f"{base}/api/templates", json={"data": {"title": "模板A", "theme": ["民生"], "structure": [], "killer_sentences": []}})

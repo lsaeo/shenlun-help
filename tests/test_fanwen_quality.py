@@ -1,32 +1,63 @@
 # -*- coding: utf-8 -*-
-"""范文候选质量测试：索引页/导航页检测。"""
-import sys, io
+"""本地范文文档解析测试：docx/txt 读取 + 范文N拆分 + 短篇跳过。"""
+import sys, io, os, tempfile
 sys.path.insert(0, ".")
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
-from app import fetchers
+from app import docreader
 
-test_pages = {
-    "真题索引": ("历年国考申论真题 2026-04-28 [申论] 2026国考申论真题（地市卷） "
-                 "2026-04-28 [申论] 2026国考申论真题（副省卷） 2026-01-05 [申论] 2026国考真题（执法卷） "
-                 "2025-08-25 [申论] 2025国考真题 2024-12-01 [申论] 2024国考真题 2023-11-01 [申论] 2023国考真题", True),
-    "省份导航": ("各地考试 华东 山东 江苏 浙江 安徽 江西 福建 上海 华中 湖北 湖南 河南 华南 广东 广西 "
-                 "海南 西南 四川 云南 贵州 重庆 西藏 西北 陕西 甘肃 宁夏 新疆 青海 华北 北京 天津 内蒙古 "
-                 "山西 河北 东北 辽宁 吉林 黑龙江 更多 村官 选调生 乡镇公务员 事业单位 特岗教师", True),
-    "真实范文": ("近年来，电信网络诈骗案件多发，人民群众财产安全受到威胁。守护好群众的钱袋子，"
-                 "既是民生所系，也是治理所需。守护钱袋子，要在宣传上做加法。要创新反诈宣传形式，"
-                 "用群众听得懂的语言，让反诈知识入脑入心。守护钱袋子，要在防范上做乘法。要筑牢技术防线，"
-                 "及时预警拦截可疑交易。守护钱袋子，要在打击上做减法。要保持高压态势，从严从快打击犯罪。"
-                 "利民之事，丝发必兴。唯有宣传加力、防范加码、打击加严，方能守好群众的钱袋子。", False),
-    "空文本": ("", True),
-}
+# 1) 范文标记拆分
+text = """范文一话题：城市治理数字化
+数字化让城市更畅通。城市治理水平稳步提升。数字化建设是重要抓手。
+城市治理现代化需要数据赋能，更需要以人为本。要坚持问题导向，补齐短板。
+基层社区是治理的最小单元，要打通最后一公里，让服务触达千家万户。
+范文二话题：基层治理
+基层治理是国家治理基石。要把矛盾化解在基层。治理效能持续提升。
+党建引领是根本保证，群众参与是力量源泉，法治保障是坚强支撑。
+范文三话题：短篇示例
+太短了。
+"""
+arts = docreader.split_fanwen(text, source_file="测试.docx")
+print(f"拆分 {len(arts)} 篇")
+assert len(arts) == 3, f"应拆 3 篇, 实际 {len(arts)}"
+assert arts[0]["title"] == "范文一话题：城市治理数字化"
+assert "数字化" in arts[0]["content"]
+assert arts[1]["topic"] == "基层治理"
+print(f"[OK] 拆分 {len(arts)} 篇, 标题/topic 正确")
 
-ok = True
-for name, (text, expect_index) in test_pages.items():
-    got = fetchers._is_index_page(text)
-    status = "PASS" if got == expect_index else "FAIL"
-    if got != expect_index:
-        ok = False
-    print(f"{status} {name}: {'索引页' if got else '正文'} (期望 {'索引页' if expect_index else '正文'})")
+# 短篇识别逻辑验证：用 30 字阈值模拟（真实阈值 MIN_FANWEN_LEN=300 由 scan_sucai 应用）
+SHORT = 30
+short = [a for a in arts if len(a["content"]) < SHORT]
+assert len(short) == 1 and short[0]["title"].startswith("范文三"), f"仅范文三应为短篇, 实际 {len(short)}"
+print(f"[OK] 短篇识别: {len(short)} 篇 (<{SHORT}字), 长篇保留 {len(arts)-len(short)} 篇")
+# 真实阈值常量存在
+assert docreader.MIN_FANWEN_LEN == 300
+print(f"[OK] 真实阈值 MIN_FANWEN_LEN={docreader.MIN_FANWEN_LEN}")
 
-print("\n=== FANWEN QUALITY TEST", "PASSED" if ok else "FAILED", "===")
-sys.exit(0 if ok else 1)
+# 2) txt 读取（GBK 编码）
+tmp = tempfile.mkdtemp()
+try:
+    gbk_path = os.path.join(tmp, "范文.txt")
+    with open(gbk_path, "w", encoding="gbk") as f:
+        f.write("范文一话题：测试\n这是一篇测试范文正文。内容足够长。用于验证编码读取。")
+    txt = docreader.read_file_text(gbk_path)
+    assert "测试" in txt and "范文一" in txt, "GBK txt 读取失败"
+    print("[OK] GBK txt 读取")
+
+    # 3) 无标记回退：整篇一篇
+    plain = "没有范文标记的整篇文章。第一段。第二段。第三段。第四段。"
+    arts2 = docreader.split_fanwen(plain, source_file="无标记.txt")
+    assert len(arts2) == 1, f"无标记应 1 篇, 实际 {len(arts2)}"
+    print(f"[OK] 无标记回退 1 篇")
+finally:
+    import shutil
+    shutil.rmtree(tmp, ignore_errors=True)
+
+# 4) 真实 sucai 扫描（若存在）
+if os.path.isdir("sucai"):
+    real = docreader.scan_sucai("sucai")
+    print(f"[INFO] sucai 实际扫描 {len(real)} 篇")
+    if real:
+        assert all(a.get("title") for a in real)
+        assert real[0].get("file"), "应带文件名"
+
+print("\n=== DOCREADER TEST PASSED ===")

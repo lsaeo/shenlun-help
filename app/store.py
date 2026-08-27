@@ -27,6 +27,7 @@ DEFAULT_CONFIG = {
     "api_key": "",
     "api_base": "https://api.deepseek.com",
     "model": "deepseek-chat",
+    "ai_provider": "deepseek",
     "update_time": "07:00",
     "daily_hotspots": 5,
     "daily_cards": 5,
@@ -112,6 +113,7 @@ class JsonStore:
             "topics": os.path.join(data_dir, "topics.json"),
             "review": os.path.join(data_dir, "review.json"),
             "fanwen": os.path.join(data_dir, "fanwen.json"),
+            "fanwen_index": os.path.join(data_dir, "fanwen_index.json"),
         }
         self._cache: dict[str, object] = {}
         self._seed_dir = seed_dir
@@ -149,6 +151,10 @@ class JsonStore:
                 self._cache["review"]["items"] = []
             if not isinstance(self._cache["fanwen"], list):
                 self._cache["fanwen"] = []
+            if not isinstance(self._cache["fanwen_index"], dict):
+                self._cache["fanwen_index"] = {"articles": []}
+            elif "articles" not in self._cache["fanwen_index"]:
+                self._cache["fanwen_index"]["articles"] = []
             self._save_all()
 
     def _load_seed(self, name: str):
@@ -338,6 +344,63 @@ class JsonStore:
     def last_fanwen_date(self) -> str | None:
         with self._lock:
             return self._cache["config"].get("last_fanwen_date")
+
+    # ---------- 范文索引（本地轮转解析） ----------
+
+    def fanwen_index(self) -> list[dict]:
+        """返回索引中的范文列表（含解析状态）。"""
+        with self._lock:
+            return copy.deepcopy(self._cache["fanwen_index"].get("articles", []))
+
+    def save_fanwen_index(self, articles: list[dict]):
+        """覆盖保存索引（合并状态：已解析/已跳过的保留，新篇加入）。"""
+        with self._lock:
+            old = {a.get("id"): a for a in self._cache["fanwen_index"].get("articles", [])}
+            merged = []
+            seen = set()
+            for a in articles:
+                aid = a.get("id") or f"{a.get('path')}#{a.get('index')}"
+                # 保留旧状态
+                if aid in old:
+                    a["status"] = old[aid].get("status", "待解析")
+                else:
+                    a["status"] = "待解析"
+                a["id"] = aid
+                seen.add(aid)
+                merged.append(a)
+            self._cache["fanwen_index"]["articles"] = merged
+            self._save("fanwen_index")
+            return copy.deepcopy(merged)
+
+    def next_fanwen_pending(self) -> dict | None:
+        """取第一个待解析的范文（按顺序轮转）；无则返回 None。"""
+        with self._lock:
+            for a in self._cache["fanwen_index"].get("articles", []):
+                if a.get("status") == "待解析":
+                    return copy.deepcopy(a)
+        return None
+
+    def mark_fanwen_status(self, article_id: str, status: str):
+        """标记范文状态：已解析 / 已跳过 / 待解析。"""
+        with self._lock:
+            for a in self._cache["fanwen_index"].get("articles", []):
+                if a.get("id") == article_id:
+                    a["status"] = status
+                    a["resolved_date"] = today_str()
+                    self._save("fanwen_index")
+                    return True
+        return False
+
+    def fanwen_stats(self) -> dict:
+        """轮转进度统计。"""
+        with self._lock:
+            arts = self._cache["fanwen_index"].get("articles", [])
+            return {
+                "total": len(arts),
+                "pending": sum(1 for a in arts if a.get("status") == "待解析"),
+                "resolved": sum(1 for a in arts if a.get("status") == "已解析"),
+                "skipped": sum(1 for a in arts if a.get("status") == "已跳过"),
+            }
 
     # ---------- 复习系统 ----------
 

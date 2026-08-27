@@ -114,11 +114,18 @@
     </div>
     <div id="fanwen-panel" class="fanwen-panel hidden">
       <div class="fw-head" style="margin-top:16px">
-        <h2>📄 优秀范文 → 模板</h2>
-        <button id="fw-fanwen-fetch" class="btn accent">🔍 抓取范文候选</button>
-        <button id="fw-fanwen-manual" class="btn">＋ 手动粘贴</button>
+        <h2>📄 本地范文 → 模板</h2>
+        <button id="fw-fanwen-refresh" class="btn">刷新</button>
       </div>
-      <div id="fanwen-list" class="card-list"></div>
+      <div id="fanwen-stats" class="fanwen-stats"></div>
+      <div class="fw-block">
+        <h3>🗂 sucai/ 文件（点击直接解析成模板）</h3>
+        <div id="fanwen-file-list" class="fw-chips"></div>
+      </div>
+      <div class="fw-block">
+        <h3>🔁 每日轮转队列</h3>
+        <div id="fanwen-queue" class="fw-dims"></div>
+      </div>
     </div>
   </section>
 
@@ -148,6 +155,11 @@
       </label>
       <label>模型
         <input id="cfg-model" type="text">
+      </label>
+      <label>AI 提供商（更多提供商开发中）
+        <select id="cfg-provider" style="padding:9px 12px">
+          <option value="deepseek">DeepSeek API</option>
+        </select>
       </label>
       <h2>每日更新</h2>
       <label>更新时间

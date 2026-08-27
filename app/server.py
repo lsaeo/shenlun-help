@@ -292,23 +292,14 @@ def create_app(store: JsonStore, pipeline: Pipeline) -> FastAPI:
 
     @app.post("/api/templates/from-fanwen")
     def template_from_fanwen(body: GenericBody):
-        """确认范文 → AI 解析成模板 → 存模板库。body.data: {candidate_id} 或 {title, content}。"""
+        """手动粘贴范文 → AI 解析成模板。body.data: {title, content}。"""
         if not pipeline.llm.configured:
             raise HTTPException(400, "未配置 API Key，无法解析模板")
         data = body.data
-        cid = data.get("candidate_id")
-        if cid:
-            cand = store.confirm_fanwen(cid)
-            if cand is None:
-                raise HTTPException(404, "候选不存在")
-            title, content = cand.get("title", ""), cand.get("content", "")
-            source = cand.get("url", "")
-        else:
-            title = str(data.get("title", "")).strip()
-            content = str(data.get("content", "")).strip()
-            source = str(data.get("source", "")).strip() or "手动粘贴"
-            if not title or not content:
-                raise HTTPException(400, "title/content 不能为空")
+        title = str(data.get("title", "")).strip()
+        content = str(data.get("content", "")).strip()
+        if not title or not content:
+            raise HTTPException(400, "title/content 不能为空")
         result = {}
         def _run():
             nonlocal result
@@ -323,68 +314,56 @@ def create_app(store: JsonStore, pipeline: Pipeline) -> FastAPI:
             raise HTTPException(502, result["error"])
         template = store.create("templates", {
             "title": result.get("title", title),
-            "source": source,
+            "source": "手动粘贴",
             "date": None,
             "theme": result.get("theme", []),
             "structure": result.get("structure", []),
             "killer_sentences": result.get("killer_sentences", []),
         })
-        # 保存原文到 sucai/范文/
-        try:
-            import os
-            from pathlib import Path
-            from datetime import date as _d
-            fanwen_dir = Path(__file__).resolve().parent.parent / "sucai" / "范文" / _d.today().isoformat()
-            fanwen_dir.mkdir(parents=True, exist_ok=True)
-            safe = "".join(c for c in title if c not in '\\/:*?"<>|')[:30] or "范文"
-            (fanwen_dir / f"{safe}.txt").write_text(
-                f"标题：{title}\n来源：{source}\n\n{content}", encoding="utf-8")
-            template["saved_to"] = str(fanwen_dir)
-        except Exception as e:  # noqa: BLE001
-            log.info("范文保存 sucai 失败: %s", e)
         return template
 
-    # ---------- 范文候选 ----------
-    @app.get("/api/fanwen/candidates")
-    def fanwen_candidates():
-        return {"items": store.list_fanwen_candidates()}
+    # ---------- 本地范文文件解析（V2 打磨二） ----------
+    @app.post("/api/fanwen/parse-file")
+    def fanwen_parse_file(body: GenericBody):
+        """解析本地范文文件（docx/txt/xml）为模板。body.data: {path, title?}。"""
+        if not pipeline.llm.configured:
+            raise HTTPException(400, "未配置 API Key，无法解析模板")
+        path = str(body.data.get("path", "")).strip()
+        if not path or not os.path.isfile(path):
+            raise HTTPException(400, f"文件不存在: {path}")
+        title = str(body.data.get("title", "")).strip() or os.path.basename(path)
+        result = {}
+        def _run():
+            nonlocal result
+            try:
+                result = pipeline._resolve_fanwen_from_file(path, title)
+            except Exception as e:  # noqa: BLE001
+                result = {"error": str(e)}
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        t.join(timeout=240)
+        if result.get("error"):
+            raise HTTPException(502, result["error"])
+        return result
 
-    @app.post("/api/fanwen/fetch")
-    def fanwen_fetch():
-        """手动触发抓范文候选。"""
-        cands = pipeline.fetch_fanwen_candidates_sync()
-        if not cands:
-            raise HTTPException(502, "本次未抓到可读范文，可尝试手动粘贴")
-        store.save_fanwen_candidates(cands)
-        return {"items": cands}
+    @app.get("/api/fanwen/index")
+    def fanwen_index():
+        """返回本地范文轮转索引与进度。"""
+        return {"items": store.fanwen_index(), "stats": store.fanwen_stats()}
 
-    @app.post("/api/fanwen/add-manual")
-    def fanwen_add_manual(body: GenericBody):
-        """手动粘贴范文作为候选。"""
-        title = str(body.data.get("title", "")).strip()
-        content = str(body.data.get("content", "")).strip()
-        if not title or not content:
-            raise HTTPException(400, "标题/内容不能为空")
-        import uuid
-        cands = store.list_fanwen_candidates()
-        cands.append({
-            "id": uuid.uuid4().hex[:8],
-            "title": title,
-            "url": "",
-            "source": "手动粘贴",
-            "content": content,
-            "confirmed": False,
-        })
-        store.save_fanwen_candidates(cands)
-        return {"items": cands}
-
-    @app.post("/api/fanwen/add-manual-remove")
-    def fanwen_remove(body: GenericBody):
-        """按 id 列表过滤候选（删除）。"""
-        ids = set(body.data.get("ids", []))
-        cands = [c for c in store.list_fanwen_candidates() if c.get("id") not in ids]
-        store.save_fanwen_candidates(cands)
-        return {"items": cands}
+    @app.get("/api/fanwen/list-files")
+    def fanwen_list_files():
+        """列出 sucai 下可解析的文件（供前端展示）。"""
+        from pathlib import Path
+        sucai_dir = Path(__file__).resolve().parent.parent / "sucai"
+        files = []
+        if sucai_dir.is_dir():
+            for fn in sorted(sucai_dir.iterdir()):
+                if fn.name.startswith("~$"):
+                    continue
+                if fn.suffix.lower() in (".docx", ".txt", ".xml", ".docm"):
+                    files.append({"name": fn.name, "path": str(fn)})
+        return {"files": files}
 
     # ---------- 配置 ----------
     @app.get("/api/config")
