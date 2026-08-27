@@ -16,7 +16,7 @@ from app.llm import DeepSeekClient
 tmp = TmpData()
 store = JsonStore(tmp.dir, SEED)
 store.set_config({"last_update_date": None})  # 确保从干净状态测
-llm = DeepSeekClient("", "", "deepseek-chat")  # 无 key
+llm = DeepSeekClient("", "", "deepseek-v4-flash")  # 无 key
 pipe = Pipeline(store, llm)
 
 print("配置了 key?", llm.configured)

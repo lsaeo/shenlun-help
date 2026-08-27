@@ -26,7 +26,7 @@ COLLECTIONS = ("hotspots", "topic_cards", "phrases", "expressions", "cases", "te
 DEFAULT_CONFIG = {
     "api_key": "",
     "api_base": "https://api.deepseek.com",
-    "model": "deepseek-chat",
+    "model": "deepseek-v4-flash",  # 2026-07-24 起旧名 deepseek-chat 停用，迁移到 V4
     "ai_provider": "deepseek",
     "update_time": "07:00",
     "daily_hotspots": 5,
@@ -138,6 +138,10 @@ class JsonStore:
             # 配置合并默认值（新增字段自动补齐）
             merged = dict(DEFAULT_CONFIG)
             merged.update(self._cache["config"])
+            # 旧模型名自动迁移（deepseek-chat/deepseek-reasoner 2026-07-24 停用）
+            old_model = merged.get("model", "")
+            if old_model in ("deepseek-chat", "deepseek-reasoner"):
+                merged["model"] = "deepseek-v4-flash"
             self._cache["config"] = merged
             for name in COLLECTIONS:
                 if not isinstance(self._cache[name], list):

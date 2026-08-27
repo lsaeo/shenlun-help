@@ -1009,7 +1009,7 @@ async function loadSettings() {
   const cfg = await api("/api/config");
   $("#cfg-key").value = cfg.api_key || "";
   $("#cfg-base").value = cfg.api_base || "https://api.deepseek.com";
-  $("#cfg-model").value = cfg.model || "deepseek-chat";
+  $("#cfg-model").value = cfg.model || "deepseek-v4-flash";
   $("#cfg-provider").value = cfg.ai_provider || "deepseek";
   $("#cfg-time").value = cfg.update_time || "07:00";
   $("#cfg-hot").value = cfg.daily_hotspots || 5;
@@ -1028,7 +1028,7 @@ async function saveSettings() {
   const data = {
     api_key: $("#cfg-key").value.trim(),
     api_base: $("#cfg-base").value.trim() || "https://api.deepseek.com",
-    model: $("#cfg-model").value.trim() || "deepseek-chat",
+    model: $("#cfg-model").value.trim() || "deepseek-v4-flash",
     ai_provider: $("#cfg-provider").value || "deepseek",
     update_time: $("#cfg-time").value || "07:00",
     daily_hotspots: Math.max(1, Math.min(20, Number($("#cfg-hot").value) || 5)),
