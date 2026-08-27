@@ -1,10 +1,14 @@
 """本地 JSON 数据层。
 
-所有数据落在应用根目录的 data/ 下，四个文件：
-  config.json      配置（API key、更新时间、每日数量、新闻源、last_update_date）
+所有数据落在应用根目录的 data/ 下，文件：
+  config.json      配置（API key、更新时间、每日数量、新闻源、字体、last_update_date）
   hotspots.json    真实热点（草稿|已入库）
   topic_cards.json 高频考点话题卡（草稿|已入库）
   phrases.json     万能语段库
+  expressions.json 表达库（规范词/好词/平易词）
+  cases.json       案例素材（AI 辅助拆解产物）
+  topics.json      话题拆解树（8 主题 × 维度）
+  review.json      复习池（记忆曲线排期 + 浏览进度）
 
 线程安全：所有读写经 self._lock 串行化；对外返回深拷贝。
 首次运行：data/ 缺失的文件若 seed/ 下存在同名种子，自动复制初始化。
@@ -16,9 +20,9 @@ import json
 import os
 import threading
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
-COLLECTIONS = ("hotspots", "topic_cards", "phrases")
+COLLECTIONS = ("hotspots", "topic_cards", "phrases", "expressions", "cases")
 DEFAULT_CONFIG = {
     "api_key": "",
     "api_base": "https://api.deepseek.com",
@@ -28,20 +32,27 @@ DEFAULT_CONFIG = {
     "daily_cards": 5,
     "daily_phrases": 3,
     "catchup_limit": 3,
+    "daily_random": 3,
+    "font_base": 14,
+    "font_emphasis": 16,
     "sources": [
         {
-            "name": "人民网时政",
-            "kind": "rss",
-            "url": "http://www.people.com.cn/rss/politics.xml",
-            "keywords": ["民生", "生态", "法治", "经济", "创新", "文化", "乡村",
-                         "基层", "就业", "养老", "教育", "医疗", "改革", "科技", "人才"],
+            "name": "人民日报要闻",
+            "kind": "html",
+            "url": "https://www.people.com.cn/",
+            "keywords": [],
         },
         {
-            "name": "新华网时政",
-            "kind": "rss",
-            "url": "http://www.xinhuanet.com/politics/news_politics.xml",
-            "keywords": ["民生", "生态", "法治", "经济", "创新", "文化", "乡村",
-                         "基层", "就业", "养老", "教育", "医疗", "改革", "科技", "人才"],
+            "name": "中国政府网要闻",
+            "kind": "html",
+            "url": "https://www.gov.cn/yaowen/liebiao/",
+            "keywords": [],
+        },
+        {
+            "name": "新华网要闻",
+            "kind": "html",
+            "url": "http://www.news.cn/politics/",
+            "keywords": [],
         },
     ],
     "phrase_sources": [
@@ -57,6 +68,8 @@ DEFAULT_CONFIG = {
     "last_update_date": None,
 }
 THEMES = ["民生", "生态", "法治", "文化", "创新", "经济", "基层治理", "青年担当"]
+# 记忆曲线间隔（天）：stage 0..7
+REVIEW_INTERVALS = [1, 2, 4, 7, 15, 30, 60, 90]
 
 
 def today_str() -> str:
@@ -79,6 +92,10 @@ class JsonStore:
             "hotspots": os.path.join(data_dir, "hotspots.json"),
             "topic_cards": os.path.join(data_dir, "topic_cards.json"),
             "phrases": os.path.join(data_dir, "phrases.json"),
+            "expressions": os.path.join(data_dir, "expressions.json"),
+            "cases": os.path.join(data_dir, "cases.json"),
+            "topics": os.path.join(data_dir, "topics.json"),
+            "review": os.path.join(data_dir, "review.json"),
         }
         self._cache: dict[str, object] = {}
         self._seed_dir = seed_dir
@@ -107,6 +124,13 @@ class JsonStore:
             for name in COLLECTIONS:
                 if not isinstance(self._cache[name], list):
                     self._cache[name] = []
+            # topics/review 为 dict 型结构
+            if not isinstance(self._cache["topics"], list):
+                self._cache["topics"] = []
+            if not isinstance(self._cache["review"], dict):
+                self._cache["review"] = {"items": [], "progress": {}}
+            elif "items" not in self._cache["review"]:
+                self._cache["review"]["items"] = []
             self._save_all()
 
     def _load_seed(self, name: str):
@@ -232,17 +256,169 @@ class JsonStore:
                     return copy.deepcopy(it)
         return None
 
+    # ---------- 表达库专属 ----------
+
+    def toggle_expr_collect(self, expr_id: str) -> dict | None:
+        with self._lock:
+            for it in self._coll("expressions"):
+                if it.get("id") == expr_id:
+                    it["collected"] = not bool(it.get("collected", False))
+                    self._save("expressions")
+                    return copy.deepcopy(it)
+        return None
+
+    # ---------- 话题拆解树 ----------
+
+    def list_topics(self) -> list[dict]:
+        with self._lock:
+            return copy.deepcopy(self._cache["topics"])
+
+    def get_topic(self, theme: str) -> dict | None:
+        with self._lock:
+            for t in self._cache["topics"]:
+                if t.get("theme") == theme:
+                    return copy.deepcopy(t)
+        return None
+
+    def upsert_topic(self, theme: str, dimensions: list[dict]) -> dict:
+        """覆盖式更新某个主题的拆解维度。"""
+        with self._lock:
+            for t in self._cache["topics"]:
+                if t.get("theme") == theme:
+                    t["dimensions"] = dimensions
+                    self._save("topics")
+                    return copy.deepcopy(t)
+            entry = {"theme": theme, "dimensions": dimensions}
+            self._cache["topics"].append(entry)
+            self._save("topics")
+            return copy.deepcopy(entry)
+
+    # ---------- 复习系统 ----------
+
+    def review_all(self) -> list[dict]:
+        with self._lock:
+            return copy.deepcopy(self._cache["review"].get("items", []))
+
+    def review_progress(self) -> dict:
+        with self._lock:
+            return copy.deepcopy(self._cache["review"].get("progress", {}))
+
+    def set_review_progress(self, patch: dict):
+        with self._lock:
+            self._cache["review"]["progress"].update(patch)
+            self._save("review")
+
+    def is_in_review(self, item_type: str, item_id: str) -> bool:
+        with self._lock:
+            return any(r.get("type") == item_type and r.get("item_id") == item_id
+                       for r in self._cache["review"].get("items", []))
+
+    def add_to_review(self, item_type: str, item_id: str) -> dict:
+        """点「背完了」→ 永久进入复习池，stage=0，明天首次到期。"""
+        with self._lock:
+            items = self._cache["review"].setdefault("items", [])
+            for r in items:
+                if r.get("type") == item_type and r.get("item_id") == item_id:
+                    return copy.deepcopy(r)  # 已在池中
+            entry = {
+                "id": new_id(),
+                "type": item_type,
+                "item_id": item_id,
+                "stage": 0,
+                "next_review": (date.today() + timedelta(days=REVIEW_INTERVALS[0])).isoformat(),
+                "last_review": None,
+                "review_count": 0,
+                "score": 3,
+                "mastered": False,
+            }
+            items.append(entry)
+            self._save("review")
+            return copy.deepcopy(entry)
+
+    def review_answer(self, item_type: str, item_id: str, result: str) -> dict:
+        """闪卡自评：remember(记住了)/fuzzy(模糊)/forget(忘了)。
+
+        remember → stage+1，间隔变长；fuzzy/forget → stage 回退 1 档，间隔缩短。
+        连续到最高 stage 标记 mastered。
+        """
+        with self._lock:
+            items = self._cache["review"].setdefault("items", [])
+            for r in items:
+                if r.get("type") == item_type and r.get("item_id") == item_id:
+                    stage = int(r.get("stage", 0))
+                    if result == "remember":
+                        stage = min(stage + 1, len(REVIEW_INTERVALS) - 1)
+                    elif result == "fuzzy":
+                        stage = max(stage - 1, 0)
+                    else:  # forget
+                        stage = 0
+                    r["stage"] = stage
+                    r["last_review"] = today_str()
+                    r["review_count"] = int(r.get("review_count", 0)) + 1
+                    r["score"] = {"remember": 3, "fuzzy": 2, "forget": 1}.get(result, 3)
+                    r["next_review"] = (date.today() + timedelta(days=REVIEW_INTERVALS[stage])).isoformat()
+                    if stage >= len(REVIEW_INTERVALS) - 1:
+                        r["mastered"] = True
+                    self._save("review")
+                    return copy.deepcopy(r)
+        return None
+
+    def remove_from_review(self, item_type: str, item_id: str) -> bool:
+        with self._lock:
+            items = self._cache["review"].setdefault("items", [])
+            for i, r in enumerate(items):
+                if r.get("type") == item_type and r.get("item_id") == item_id:
+                    items.pop(i)
+                    self._save("review")
+                    return True
+        return False
+
+    def due_review(self, limit: int | None = None) -> list[dict]:
+        """今日到期（next_review <= 今天 且未掌握）的复习项，附对应素材摘要。"""
+        today = today_str()
+        with self._lock:
+            items = self._cache["review"].get("items", [])
+            due = [r for r in items
+                   if not r.get("mastered") and r.get("next_review", "9999") <= today]
+            due.sort(key=lambda r: r.get("next_review", ""))
+            # 附素材标题
+            enriched = []
+            for r in due[: limit or len(due)]:
+                it = self.get(r["type"], r["item_id"])
+                enriched.append({**r, "content": it})
+            return enriched
+
+    def random_review(self, n: int = 3) -> list[dict]:
+        """每日随机抽查：从已入池未掌握的内容里随机抽 n 条（不重复今日已到期的）。"""
+        import random
+        today = today_str()
+        with self._lock:
+            items = [r for r in self._cache["review"].get("items", [])
+                     if not r.get("mastered") and r.get("next_review", "9999") > today]
+            picked = random.sample(items, min(n, len(items)))
+            enriched = []
+            for r in picked:
+                it = self.get(r["type"], r["item_id"])
+                enriched.append({**r, "content": it})
+            return enriched
+
     # ---------- 概览 ----------
 
     def overview(self) -> dict:
         with self._lock:
             def drafts(name: str) -> int:
                 return sum(1 for it in self._coll(name) if it.get("status") == "草稿")
+            today = today_str()
+            due_count = sum(1 for r in self._cache["review"].get("items", [])
+                            if not r.get("mastered") and r.get("next_review", "9999") <= today)
             return {
                 "hotspots_total": len(self._coll("hotspots")),
                 "hotspots_draft": drafts("hotspots"),
                 "cards_total": len(self._coll("topic_cards")),
                 "cards_draft": drafts("topic_cards"),
                 "phrases_total": len(self._coll("phrases")),
+                "expressions_total": len(self._coll("expressions")),
+                "review_pool": len(self._cache["review"].get("items", [])),
+                "review_due": due_count,
                 "last_update_date": self._cache["config"].get("last_update_date"),
             }

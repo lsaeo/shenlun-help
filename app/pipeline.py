@@ -65,35 +65,46 @@ class Pipeline:
         existing_card_themes = {it.get("theme", "") for it in self.store.list_all("topic_cards")
                                 if it.get("date") == target}
         try:
-            # 1) 真实热点：只有当天才抓新闻
+            # 1) 真实热点：只有当天才抓新闻 → AI 挑选重点 → 逐条分析
             if target == today_str():
-                hotspots = fetchers.fetch_news(
+                candidates = fetchers.fetch_news(
                     cfg.get("sources", []),
-                    limit=cfg.get("daily_hotspots", 5) + len(existing_hot_titles),
+                    limit=cfg.get("daily_hotspots", 5) * 6,  # 抓全量候选供挑选
                 )
-                if hotspots:
-                    for item in hotspots:
+                if candidates:
+                    # 先过滤已入库的标题，减少 AI 挑选负担
+                    fresh_cands = [c for c in candidates if c["title"] not in existing_hot_titles]
+                    if progress:
+                        progress(f"候选新闻 {len(fresh_cands)} 条，AI 挑选重点…")
+                    picked = self._pick_hotspots(fresh_cands, cfg.get("daily_hotspots", 5))
+                    if not picked and fresh_cands:
+                        # AI 挑选失败（无 key/超时）→ 降级：按最新日期取前 N 条
+                        picked = fresh_cands[: cfg.get("daily_hotspots", 5)]
+                        result["errors"].append("AI 挑选失败，已降级按最新新闻取前几条")
+                    for item in picked:
+                        if item["title"] in existing_hot_titles:
+                            continue
+                        existing_hot_titles.add(item["title"])
                         if progress:
                             progress(f"分析热点：{item['title'][:20]}…")
-                        if item["title"] in existing_hot_titles:
-                            continue  # 已入库过，跳过
-                        existing_hot_titles.add(item["title"])
                         try:
                             analysis = self.llm.analyze_hotspot(
-                                item["title"], item["summary"], item["source"])
+                                item["title"], item.get("summary", ""), item.get("source", ""))
                             self.store.create("hotspots", {
                                 "date": target,
                                 "title": item["title"],
-                                "source": item["source"],
-                                "url": item["url"],
-                                "summary": item["summary"],
+                                "source": item.get("source", ""),
+                                "url": item.get("url", ""),
+                                "summary": item.get("summary", ""),
+                                "why": item.get("why", ""),
+                                "subjects": item.get("subjects", []),
                                 **analysis,
                             })
                             result["hotspots"] += 1
                         except LLMError as e:
                             result["errors"].append(f"热点分析失败（{item['title'][:15]}…）：{e}")
                 else:
-                    result["errors"].append("新闻抓取失败或当天无匹配新闻，已跳过热点生成（可手动录入）")
+                    result["errors"].append("新闻抓取失败或无近14天新闻，已跳过热点生成（可手动录入）")
             else:
                 log.info("补拉日 %s：只生成话题卡和语段", target)
 
@@ -189,6 +200,28 @@ class Pipeline:
                 except LLMError as e:
                     log.warning("语段改稿失败: %s", e)
         return added
+
+    def _pick_hotspots(self, candidates: list[dict], limit: int) -> list[dict]:
+        """AI 从候选新闻中挑选重点；无 key 或失败时降级按最新日期取前 limit 条。"""
+        if not candidates:
+            return []
+        if not self.llm.configured:
+            return candidates[:limit]
+        try:
+            picked = self.llm.pick_hotspots(candidates)
+            picked = [p for p in picked if p.get("title")]
+            # 若 AI 挑得不足，用剩余候选补齐
+            if len(picked) < limit:
+                picked_titles = {p["title"] for p in picked}
+                for c in candidates:
+                    if len(picked) >= limit:
+                        break
+                    if c["title"] not in picked_titles:
+                        picked.append(c)
+            return picked[:limit]
+        except Exception as e:  # noqa: BLE001 —— 挑选失败降级
+            log.warning("AI 挑选重点失败，降级: %s", e)
+            return candidates[:limit]
 
     def run_catchup(self, progress=None) -> dict:
         """启动补拉：缺失天数 ≤ catchup_limit，逐天生成（只话题卡）。"""

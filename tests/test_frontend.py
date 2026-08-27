@@ -68,14 +68,49 @@ def step3(res):
     except Exception as e:
         print("[FAIL] 解析失败:", e, "raw:", str(res)[:80])
         results["n"] = 0
+    # 切到表达库验证新 Tab 渲染（直接读 DOM，不依赖 setTimeout 全局变量）
+    view.page().runJavaScript("switchTab('expressions')", lambda _: QTimer.singleShot(3000, step4))
+
+def step4():
+    view.page().runJavaScript(
+        "JSON.stringify({ex: document.querySelectorAll('#ex-list .item').length,"
+        " kind: document.querySelectorAll('.kind-好词').length})",
+        lambda r: step5(r))
+
+def step5(res):
+    try:
+        import json
+        r = json.loads(res or "{}")
+        print(f"[{'OK' if r.get('ex', 0) >= 20 else 'FAIL'}] 表达库渲染 {r.get('ex', 0)} 条")
+        print(f"[{'OK' if r.get('kind', 0) >= 5 else 'FAIL'}] 好词标签 {r.get('kind', 0)} 个")
+    except Exception as e:
+        print("[FAIL] 表达库解析:", e)
+    view.page().runJavaScript("switchTab('framework')", lambda _: QTimer.singleShot(3000, step6))
+
+def step6():
+    view.page().runJavaScript(
+        "JSON.stringify({btns: document.querySelectorAll('.fw-theme-btn').length,"
+        " dims: document.querySelectorAll('.fw-dim').length})",
+        lambda r: step7(r))
+
+def step7(res):
+    try:
+        import json
+        r = json.loads(res or "{}")
+        print(f"[{'OK' if r.get('btns', 0) == 8 else 'FAIL'}] 框架主题按钮 {r.get('btns', 0)} 个（应 8）")
+        print(f"[{'OK' if r.get('dims', 0) >= 3 else 'FAIL'}] 拆解维度 {r.get('dims', 0)} 个")
+        results["fw_ok"] = r.get("btns", 0) == 8 and r.get("dims", 0) >= 3
+    except Exception as e:
+        print("[FAIL] 框架解析:", e)
+        results["fw_ok"] = False
     finish()
 
 def finish():
-    ok = results.get("n", 0) >= 10
+    ok = results.get("n", 0) >= 10 and results.get("fw_ok")
     print("\n=== FRONTEND TEST", "PASSED" if ok else "FAILED", "===")
     qapp.quit()
 
 QTimer.singleShot(1500, probe)
-QTimer.singleShot(20000, qapp.quit)
+QTimer.singleShot(30000, qapp.quit)
 qapp.exec()
-sys.exit(0 if results.get("n", 0) >= 10 else 1)
+sys.exit(0 if (results.get("n", 0) >= 10 and results.get("fw_ok")) else 1)

@@ -13,6 +13,9 @@
     <button class="tab active" data-tab="hotspots">今日热点</button>
     <button class="tab" data-tab="cards">话题卡</button>
     <button class="tab" data-tab="phrases">语段库</button>
+    <button class="tab" data-tab="expressions">表达库</button>
+    <button class="tab" data-tab="framework">框架</button>
+    <button class="tab" data-tab="review">复习</button>
     <button class="tab" data-tab="settings">设置</button>
   </nav>
   <div id="overview" class="overview"></div>
@@ -22,7 +25,7 @@
   <!-- 今日热点 -->
   <section id="panel-hotspots" class="panel active">
     <div class="toolbar">
-      <input id="hs-q" class="search" placeholder="搜索标题/摘要/分析…">
+      <input id="hs-q" class="search" placeholder="搜索标题/要点/金句…">
       <input id="hs-date" type="date" title="按日期筛选">
       <select id="hs-status">
         <option value="">全部状态</option>
@@ -77,6 +80,52 @@
     <div id="ph-list" class="card-list"></div>
   </section>
 
+  <!-- 表达库 -->
+  <section id="panel-expressions" class="panel">
+    <div class="toolbar wrap">
+      <input id="ex-q" class="search" placeholder="搜索规范词/好词/平易词…">
+      <div class="filters">
+        <div class="filter-group" id="f-kind">
+          <span class="fg-label">类型</span>
+        </div>
+        <div class="filter-group" id="f-extheme">
+          <span class="fg-label">主题</span>
+        </div>
+      </div>
+      <label class="check"><input type="checkbox" id="ex-collected"> 只看收藏</label>
+      <button id="ex-refresh" class="btn">刷新</button>
+      <span class="spacer"></span>
+      <button id="ex-add" class="btn primary">＋ 新增表达</button>
+    </div>
+    <div id="ex-list" class="card-list"></div>
+  </section>
+
+  <!-- 框架 -->
+  <section id="panel-framework" class="panel">
+    <div class="fw-head">
+      <h2>申论总体框架</h2>
+      <button id="fw-decompose" class="btn accent">🤖 AI 拆解案例</button>
+    </div>
+    <div class="fw-layout">
+      <div id="fw-theme-nav" class="fw-nav"></div>
+      <div id="fw-content" class="fw-content"></div>
+    </div>
+  </section>
+
+  <!-- 复习 -->
+  <section id="panel-review" class="panel">
+    <div class="toolbar">
+      <h2 style="margin:0">今日复习</h2>
+      <span class="spacer"></span>
+      <button id="rv-refresh" class="btn">刷新</button>
+    </div>
+    <div id="rv-due" class="card-list"></div>
+    <div class="rv-section-title" id="rv-random-title">随机抽查</div>
+    <div id="rv-random" class="card-list"></div>
+    <div class="rv-section-title">复习池（全部）</div>
+    <div id="rv-pool" class="card-list"></div>
+  </section>
+
   <!-- 设置 -->
   <section id="panel-settings" class="panel">
     <div class="settings-card">
@@ -103,8 +152,18 @@
       <label>每日语段搜集条数（0=关闭）
         <input id="cfg-phrases" type="number" min="0" max="10">
       </label>
+      <label>每日随机抽查条数
+        <input id="cfg-random" type="number" min="0" max="20">
+      </label>
       <label>启动补拉上限（天）
         <input id="cfg-catchup" type="number" min="0" max="7">
+      </label>
+      <h2>字体大小</h2>
+      <label>基础字号（px）
+        <input id="cfg-font-base" type="number" min="13" max="18">
+      </label>
+      <label>重点字号（px，框架/要点/金句/标题加粗）
+        <input id="cfg-font-emph" type="number" min="14" max="22">
       </label>
       <div class="row">
         <button id="cfg-save" class="btn primary">保存设置</button>
@@ -126,6 +185,23 @@
     <div class="modal-foot">
       <button id="modal-cancel" class="btn">取消</button>
       <button id="modal-save" class="btn primary">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- AI 拆解弹窗 -->
+<div id="decompose-mask" class="mask hidden">
+  <div id="decompose-modal" class="modal">
+    <div class="modal-head">
+      <span>AI 辅助拆解案例</span>
+      <button id="decompose-close" class="btn ghost">✕</button>
+    </div>
+    <div class="modal-body">
+      <label>粘贴一段社会现象 / 身边小事 / 新闻描述
+        <textarea id="dc-desc" style="min-height:120px" placeholder="例如：社区搞垃圾分类但效果差，居民还是混着扔……"></textarea>
+      </label>
+      <button id="dc-run" class="btn accent">🤖 开始拆解</button>
+      <div id="dc-result" class="dc-result"></div>
     </div>
   </div>
 </div>

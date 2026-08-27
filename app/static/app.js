@@ -1,4 +1,4 @@
-/* 公考申论素材助手 — 前端逻辑（原生 JS，无依赖） */
+/* 公考申论素材助手 V2 — 前端逻辑（原生 JS，无依赖） */
 "use strict";
 
 const $ = (sel) => document.querySelector(sel);
@@ -7,8 +7,11 @@ const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 const STATE = {
   tab: "hotspots",
   filters: { position: "", theme: "", technique: "", collected: false },
+  exFilters: { kind: "", theme: "", collected: false },
   themes: [],
   modal: { kind: "", id: null },
+  fwTheme: "",
+  inReview: {},      // "type:id" -> true
 };
 
 /* ---------- 工具 ---------- */
@@ -43,6 +46,23 @@ function fmtList(items) {
   if (!items || !items.length) return "";
   return "<ul>" + items.map((i) => `<li>${esc(i)}</li>`).join("") + "</ul>";
 }
+function anglesTags(it) {
+  const a = it?.angles || [];
+  if (!a.length) return "";
+  return `<div class="angles-row">${a.map((x) =>
+    `<button class="angle-chip" data-angle="${esc(x)}">${esc(x)}</button>`).join("")}</div>`;
+}
+function reviewBtn(type, id) {
+  const key = `${type}:${id}`;
+  if (STATE.inReview[key]) {
+    return `<span class="tag published">📌 已入复习池</span>`;
+  }
+  return `<button class="btn accent small" data-act="review-add" data-type="${type}" data-id="${id}">✔ 背完了</button>`;
+}
+function hl(text) {
+  /* 重点内容高亮（可背金句/要点） */
+  return `<span class="hl-em">${esc(text)}</span>`;
+}
 
 /* ---------- 概览 ---------- */
 async function refreshOverview() {
@@ -52,10 +72,21 @@ async function refreshOverview() {
       `<span class="badge">热点 ${o.hotspots_total}</span>` +
       (o.hotspots_draft ? `<span class="badge warn">待审热点 ${o.hotspots_draft}</span>` : "") +
       `<span class="badge">话题卡 ${o.cards_total}</span>` +
-      (o.cards_draft ? `<span class="badge warn">待审卡 ${o.cards_draft}</span>` : "") +
       `<span class="badge">语段 ${o.phrases_total}</span>` +
+      `<span class="badge">表达 ${o.expressions_total}</span>` +
+      `<span class="badge">复习池 ${o.review_pool}</span>` +
+      (o.review_due ? `<span class="badge warn">今日待复习 ${o.review_due}</span>` : "") +
       `<span class="badge">更新至 ${o.last_update_date || "—"}</span>`;
   } catch (e) { /* 服务未就绪时静默 */ }
+}
+
+/* ---------- 复习状态缓存 ---------- */
+async function loadReviewState() {
+  try {
+    const r = await api("/api/review");
+    STATE.inReview = {};
+    r.items.forEach((it) => { STATE.inReview[`${it.type}:${it.item_id}`] = true; });
+  } catch (e) { /* ignore */ }
 }
 
 /* ---------- 标签页 ---------- */
@@ -66,17 +97,19 @@ function switchTab(tab) {
   if (tab === "hotspots") loadHotspots();
   if (tab === "cards") loadCards();
   if (tab === "phrases") loadPhrases();
+  if (tab === "expressions") loadExpressions();
+  if (tab === "framework") loadFramework();
+  if (tab === "review") loadReview();
   if (tab === "settings") loadSettings();
 }
 
-/* ================= 今日热点 ================= */
+/* ================= 今日热点（V2 三层展示） ================= */
 async function loadHotspots() {
   const q = $("#hs-q").value.trim();
   const date = $("#hs-date").value;
   const status = $("#hs-status").value;
   const params = new URLSearchParams();
   if (q) params.set("q", q);
-  if (date) params.set("date", date); // 后端 list_items 未按 date 过滤，前端过滤兜底
   if (status) params.set("status", status);
   const { items } = await api(`/api/hotspots?${params}`);
   const filtered = date ? items.filter((it) => it.date === date) : items;
@@ -98,13 +131,27 @@ function renderHotspots(items) {
         <span>📅 ${esc(it.date)}</span>
         <span>🏷 ${esc(it.source || "—")}</span>
         ${it.url ? `<a href="${esc(it.url)}" target="_blank">原文链接</a>` : ""}
+        ${it.why ? `<span>💡 ${esc(it.why)}</span>` : ""}
+        ${(it.subjects || []).length ? it.subjects.map((s) => `<span class="tag">${esc(s)}</span>`).join("") : ""}
       </div>
-      ${it.summary ? `<div class="item-body"><div class="field"><span class="field-label">摘要</span>${esc(it.summary)}</div></div>` : ""}
-      ${it.意义 ? `<div class="item-body"><div class="field"><span class="field-label">意义</span>${esc(it.意义)}</div></div>` : ""}
-      ${it.角度?.length ? `<div class="item-body"><div class="field"><span class="field-label">角度</span>${fmtList(it.角度)}</div></div>` : ""}
-      ${it.对策?.length ? `<div class="item-body"><div class="field"><span class="field-label">对策</span>${fmtList(it.对策)}</div></div>` : ""}
-      ${it.金句 ? `<div class="item-body"><div class="field"><span class="field-label">金句</span>${esc(it.金句)}</div></div>` : ""}
+      <div class="item-body">
+        ${it.可背金句 ? `<div class="field"><span class="field-label">可背金句</span>${hl(it.可背金句)}</div>` : ""}
+        ${(it.重点提炼 || []).length ? `
+          <div class="field"><span class="field-label">重点提炼</span>
+          <ul>${it.重点提炼.map((p) => `<li>${esc(p)}</li>`).join("")}</ul></div>` : ""}
+        ${it.意义 ? `<div class="field"><span class="field-label">意义</span>${esc(it.意义)}</div>` : ""}
+        ${it.角度?.length ? `<div class="field"><span class="field-label">角度</span>${fmtList(it.角度)}</div>` : ""}
+        ${it.对策?.length ? `<div class="field"><span class="field-label">对策</span>${fmtList(it.对策)}</div>` : ""}
+        ${it.金句 ? `<div class="field"><span class="field-label">金句</span>${esc(it.金句)}</div>` : ""}
+        ${anglesTags(it)}
+      </div>
+      ${it.summary ? `
+        <details class="collapse">
+          <summary>📄 原文摘要（点击展开）</summary>
+          <div class="collapse-body">${esc(it.summary)}</div>
+        </details>` : ""}
       <div class="item-actions">
+        ${reviewBtn("hotspots", it.id)}
         ${it.status === "草稿"
           ? `<button class="btn primary small" data-act="publish" data-id="${it.id}">✔ 入库</button>
              <button class="btn small" data-act="edit" data-id="${it.id}">编辑</button>
@@ -132,7 +179,7 @@ function openHotspotModal(id = null) {
   STATE.modal = { kind: "hotspot", id };
   $("#modal-title").textContent = id ? "编辑热点" : "手动录入热点";
   const d = new Date().toISOString().slice(0, 10);
-  let it = { date: d, title: "", source: "", url: "", summary: "", 意义: "", 角度: [], 对策: [], 金句: "" };
+  let it = { date: d, title: "", source: "", url: "", summary: "", 重点提炼: [], 可背金句: "", 意义: "", 角度: [], 对策: [], 金句: "", angles: [] };
   if (id) {
     api(`/api/hotspots/${id}`).then((r) => { it = r; buildHotspotForm(it); });
     return;
@@ -144,14 +191,17 @@ function buildHotspotForm(it) {
     <label>日期 <input id="f-date" type="date" value="${esc(it.date)}"></label>
     <label>标题 <input id="f-title" type="text" value="${esc(it.title)}" placeholder="新闻标题"></label>
     <div class="row2">
-      <label>来源 <input id="f-source" type="text" value="${esc(it.source || "")}" placeholder="如：新华网"></label>
+      <label>来源 <input id="f-source" type="text" value="${esc(it.source || "")}" placeholder="如：中国政府网"></label>
       <label>原文链接 <input id="f-url" type="text" value="${esc(it.url || "")}"></label>
     </div>
-    <label>摘要 <textarea id="f-summary" placeholder="新闻内容摘要（可留空）">${esc(it.summary || "")}</textarea></label>
+    <label>重点提炼（每行一条核心要点）<textarea id="f-points" style="min-height:60px">${esc((it.重点提炼 || []).join("\n"))}</textarea></label>
+    <label>可背金句（一句话，直接背）<textarea id="f-quotable">${esc(it.可背金句 || "")}</textarea></label>
+    <label>摘要（折叠区）<textarea id="f-summary" placeholder="新闻内容摘要（可留空）">${esc(it.summary || "")}</textarea></label>
     <label>意义（该事件为何重要、对应申论主题）<textarea id="f-meaning">${esc(it.意义 || "")}</textarea></label>
     <label>角度（每行一个论述切入点）<textarea id="f-angles" placeholder="角度1\n角度2">${esc((it.角度 || []).join("\n"))}</textarea></label>
     <label>对策（每行一条）<textarea id="f-measures" placeholder="对策1\n对策2">${esc((it.对策 || []).join("\n"))}</textarea></label>
-    <label>金句 <textarea id="f-quote">${esc(it.金句 || "")}</textarea></label>`;
+    <label>金句 <textarea id="f-quote">${esc(it.金句 || "")}</textarea></label>
+    <label>可用方向（每行一个论点，如 共建共治共享）<textarea id="f-useangles">${esc((it.angles || []).join("\n"))}</textarea></label>`;
   showModal();
 }
 async function saveHotspotModal() {
@@ -161,10 +211,13 @@ async function saveHotspotModal() {
     source: $("#f-source").value.trim(),
     url: $("#f-url").value.trim(),
     summary: $("#f-summary").value.trim(),
+    重点提炼: $("#f-points").value.split("\n").map((s) => s.trim()).filter(Boolean),
+    可背金句: $("#f-quotable").value.trim(),
     意义: $("#f-meaning").value.trim(),
     角度: $("#f-angles").value.split("\n").map((s) => s.trim()).filter(Boolean),
     对策: $("#f-measures").value.split("\n").map((s) => s.trim()).filter(Boolean),
     金句: $("#f-quote").value.trim(),
+    angles: $("#f-useangles").value.split("\n").map((s) => s.trim()).filter(Boolean),
   };
   if (!data.title) { toast("标题不能为空"); return; }
   const id = STATE.modal.id;
@@ -216,9 +269,11 @@ function renderCards(items) {
         ${it.意义 ? `<div class="field"><span class="field-label">意义</span>${esc(it.意义)}</div>` : ""}
         ${it.问题 ? `<div class="field"><span class="field-label">问题</span>${esc(it.问题)}</div>` : ""}
         ${it.对策?.length ? `<div class="field"><span class="field-label">对策</span>${fmtList(it.对策)}</div>` : ""}
-        ${it.金句 ? `<div class="field"><span class="field-label">金句</span>${esc(it.金句)}</div>` : ""}
+        ${it.金句 ? `<div class="field"><span class="field-label">金句</span>${hl(it.金句)}</div>` : ""}
+        ${anglesTags(it)}
       </div>
       <div class="item-actions">
+        ${reviewBtn("topic_cards", it.id)}
         ${it.status === "草稿"
           ? `<button class="btn primary small" data-act="publish" data-id="${it.id}">✔ 入库</button>
              <button class="btn small" data-act="edit" data-id="${it.id}">编辑</button>
@@ -246,7 +301,7 @@ function openCardModal(id = null) {
   STATE.modal = { kind: "card", id };
   $("#modal-title").textContent = id ? "编辑话题卡" : "手动录入话题卡";
   const d = new Date().toISOString().slice(0, 10);
-  let it = { date: d, theme: STATE.themes[0] || "", topic: "", 背景: "", 意义: "", 问题: "", 对策: [], 金句: "" };
+  let it = { date: d, theme: STATE.themes[0] || "", topic: "", 背景: "", 意义: "", 问题: "", 对策: [], 金句: "", angles: [] };
   if (id) {
     api(`/api/topic_cards/${id}`).then((r) => { it = r; buildCardForm(it); });
     return;
@@ -268,7 +323,8 @@ function buildCardForm(it) {
     <label>意义 <textarea id="f-meaning">${esc(it.意义 || "")}</textarea></label>
     <label>问题 <textarea id="f-problems">${esc(it.问题 || "")}</textarea></label>
     <label>对策（每行一条）<textarea id="f-measures">${esc((it.对策 || []).join("\n"))}</textarea></label>
-    <label>金句 <textarea id="f-quote">${esc(it.金句 || "")}</textarea></label>`;
+    <label>金句 <textarea id="f-quote">${esc(it.金句 || "")}</textarea></label>
+    <label>可用方向（每行一个）<textarea id="f-useangles">${esc((it.angles || []).join("\n"))}</textarea></label>`;
   showModal();
 }
 async function saveCardModal() {
@@ -281,6 +337,7 @@ async function saveCardModal() {
     问题: $("#f-problems").value.trim(),
     对策: $("#f-measures").value.split("\n").map((s) => s.trim()).filter(Boolean),
     金句: $("#f-quote").value.trim(),
+    angles: $("#f-useangles").value.split("\n").map((s) => s.trim()).filter(Boolean),
   };
   if (!data.topic) { toast("话题名不能为空"); return; }
   const id = STATE.modal.id;
@@ -341,8 +398,10 @@ function renderPhrases(items) {
         ${(it.theme || []).map((t) => `<span class="tag">题·${esc(t)}</span>`).join("")}
         ${(it.technique || []).map((t) => `<span class="tag">法·${esc(t)}</span>`).join("")}
       </div>
+      ${anglesTags(it)}
       ${it.usage ? `<div class="usage">💡 ${esc(it.usage)}</div>` : ""}
       <div class="item-actions">
+        ${reviewBtn("phrases", it.id)}
         <button class="btn primary small" data-act="copy" data-id="${it.id}">📋 复制</button>
         ${it.template ? `<button class="btn small" data-act="copy-template" data-id="${it.id}">📋 复制框架</button>` : ""}
         <button class="btn small ${it.collected ? "collected" : ""}" data-act="collect" data-id="${it.id}">
@@ -389,7 +448,7 @@ async function copyText(text) {
 function openPhraseModal(id = null) {
   STATE.modal = { kind: "phrase", id };
   $("#modal-title").textContent = id ? "编辑语段" : "新增语段";
-  let it = { text: "", template: "", examples: [], position: [], theme: [], technique: [], usage: "" };
+  let it = { text: "", template: "", examples: [], position: [], theme: [], technique: [], usage: "", angles: [] };
   if (id) {
     api(`/api/phrases/${id}`).then((r) => { it = r; buildPhraseForm(it); });
     return;
@@ -421,6 +480,7 @@ function buildPhraseForm(it) {
           }).join("")}
         </div>
       </label>`).join("")}
+    <label>可用方向（每行一个论点，如 共建共治共享）<textarea id="f-useangles">${esc((it.angles || []).join("\n"))}</textarea></label>
     <label>适用场景 / 使用提示
       <textarea id="f-usage" placeholder="如：适合放在开头亮明观点；主题词可替换…">${esc(it.usage || "")}</textarea>
     </label>`;
@@ -435,6 +495,7 @@ async function savePhraseModal() {
   for (const cat of ["position", "theme", "technique"]) {
     data[cat] = $$(`input[data-cat="${cat}"]:checked`).map((c) => c.value);
   }
+  data.angles = $("#f-useangles").value.split("\n").map((s) => s.trim()).filter(Boolean);
   data.usage = $("#f-usage").value.trim();
   const id = STATE.modal.id;
   if (id) await api(`/api/phrases/${id}`, { method: "PUT", body: JSON.stringify({ data }) });
@@ -443,6 +504,314 @@ async function savePhraseModal() {
   toast("已保存");
   await loadPhrases();
   refreshOverview();
+}
+
+/* ================= 表达库 ================= */
+function renderExprFilterBar() {
+  const groups = {
+    "f-kind": ["规范词", "好词", "平易词"],
+    "f-extheme": STATE.themes,
+  };
+  for (const [gid, opts] of Object.entries(groups)) {
+    const g = $(`#${gid}`);
+    if (!g) continue;
+    g.innerHTML = `<span class="fg-label">${gid === "f-kind" ? "类型" : "主题"}</span>` +
+      opts.map((o) => `<button class="chip" data-group="${gid}" data-val="${esc(o)}">${esc(o)}</button>`).join("");
+  }
+  applyExprChipState();
+}
+function applyExprChipState() {
+  $$(".chip[data-group^=f-]").forEach((c) => {
+    const gid = c.dataset.group;
+    if (gid === "f-kind" || gid === "f-extheme") {
+      const key = gid === "f-kind" ? "kind" : "theme";
+      c.classList.toggle("on", STATE.exFilters[key] === c.dataset.val);
+    }
+  });
+}
+async function loadExpressions() {
+  const p = new URLSearchParams();
+  if (STATE.exFilters.kind) p.set("kind", STATE.exFilters.kind);
+  if (STATE.exFilters.theme) p.set("theme", STATE.exFilters.theme);
+  if (STATE.exFilters.collected) p.set("collected", "1");
+  const q = $("#ex-q").value.trim();
+  if (q) p.set("q", q);
+  const { items } = await api(`/api/expressions/filter?${p}`);
+  renderExpressions(items);
+}
+function renderExpressions(items) {
+  const box = $("#ex-list");
+  if (!items.length) {
+    box.innerHTML = `<div class="empty">暂无匹配表达。调整筛选或「＋ 新增表达」。</div>`;
+    return;
+  }
+  box.innerHTML = items.map((it) => `
+    <div class="item">
+      <div class="expr-text">${esc(it.text)}</div>
+      <div class="tags-row">
+        ${(it.kind || []).map((k) => `<span class="tag kind-${esc(k)}">${esc(k)}</span>`).join("")}
+        ${(it.theme || []).map((t) => `<span class="tag">题·${esc(t)}</span>`).join("")}
+      </div>
+      ${it.example ? `<div class="usage">✍️ ${esc(it.example)}</div>` : ""}
+      <div class="item-actions">
+        <button class="btn primary small" data-act="copy" data-id="${it.id}">📋 复制</button>
+        <button class="btn small ${it.collected ? "collected" : ""}" data-act="collect" data-id="${it.id}">
+          ${it.collected ? "★ 已收藏" : "☆ 收藏"}
+        </button>
+        <button class="btn small" data-act="edit" data-id="${it.id}">编辑</button>
+        <button class="btn danger small" data-act="delete" data-id="${it.id}">删除</button>
+      </div>
+    </div>`).join("");
+}
+async function actExpression(act, id) {
+  if (act === "copy") {
+    const it = await api(`/api/expressions/${id}`);
+    await copyText(it.text);
+    toast("已复制");
+  } else if (act === "collect") {
+    await api(`/api/expressions/${id}/toggle-collect`, { method: "POST" });
+    await loadExpressions();
+  } else if (act === "delete") {
+    if (!confirm("确定删除？")) return;
+    await api(`/api/expressions/${id}`, { method: "DELETE" });
+    toast("已删除");
+    await loadExpressions();
+  } else if (act === "edit") {
+    openExprModal(id);
+  }
+  refreshOverview();
+}
+function openExprModal(id = null) {
+  STATE.modal = { kind: "expression", id };
+  $("#modal-title").textContent = id ? "编辑表达" : "新增表达";
+  let it = { text: "", kind: [], theme: [], example: "" };
+  if (id) {
+    api(`/api/expressions/${id}`).then((r) => { it = r; buildExprForm(it); });
+    return;
+  }
+  buildExprForm(it);
+}
+function buildExprForm(it) {
+  $("#modal-body").innerHTML = `
+    <label>表达内容 <input id="f-text" type="text" value="${esc(it.text || "")}" placeholder="如：共建共治共享"></label>
+    <label>类型（可多选）
+      <div class="check-grid">
+        ${["规范词", "好词", "平易词"].map((k) => {
+          const on = (it.kind || []).includes(k);
+          return `<label class="check"><input type="checkbox" data-cat="kind" value="${esc(k)}" ${on ? "checked" : ""}> ${esc(k)}</label>`;
+        }).join("")}
+      </div>
+    </label>
+    <label>主题（可多选）
+      <div class="check-grid">
+        ${STATE.themes.map((t) => {
+          const on = (it.theme || []).includes(t);
+          return `<label class="check"><input type="checkbox" data-cat="theme" value="${esc(t)}" ${on ? "checked" : ""}> ${esc(t)}</label>`;
+        }).join("")}
+      </div>
+    </label>
+    <label>例句 / 用法 <textarea id="f-example">${esc(it.example || "")}</textarea></label>`;
+  showModal();
+}
+async function saveExprModal() {
+  const text = $("#f-text").value.trim();
+  if (!text) { toast("内容不能为空"); return; }
+  const data = { text, example: $("#f-example").value.trim() };
+  for (const cat of ["kind", "theme"]) {
+    data[cat] = $$(`input[data-cat="${cat}"]:checked`).map((c) => c.value);
+  }
+  if (!data.kind.length) { toast("至少选一个类型"); return; }
+  const id = STATE.modal.id;
+  if (id) await api(`/api/expressions/${id}`, { method: "PUT", body: JSON.stringify({ data }) });
+  else await api("/api/expressions", { method: "POST", body: JSON.stringify({ data }) });
+  hideModal();
+  toast("已保存");
+  await loadExpressions();
+  refreshOverview();
+}
+
+/* ================= 框架（主题树 + 拆解 + 骨架） ================= */
+async function loadFramework() {
+  const { items } = await api("/api/topics");
+  const nav = $("#fw-theme-nav");
+  nav.innerHTML = STATE.themes.map((t) =>
+    `<button class="fw-theme-btn ${t === STATE.fwTheme ? "on" : ""}" data-theme="${esc(t)}">${esc(t)}</button>`).join("");
+  // 默认选中第一个主题
+  if (!STATE.fwTheme && STATE.themes.length) STATE.fwTheme = STATE.themes[0];
+  if (STATE.fwTheme) renderFrameworkContent(STATE.fwTheme, items);
+}
+async function renderFrameworkContent(theme, topics) {
+  STATE.fwTheme = theme;
+  $$(".fw-theme-btn").forEach((b) => b.classList.toggle("on", b.dataset.theme === theme));
+  const box = $("#fw-content");
+  box.innerHTML = `<div class="empty">加载中…</div>`;
+  const topic = (topics || []).find((t) => t.theme === theme) || { theme, dimensions: [] };
+  const fw = await api(`/api/framework/${encodeURIComponent(theme)}`);
+  const dims = (topic.dimensions || []).map((d) => `
+    <div class="fw-dim">
+      <div class="fw-dim-name">${esc(d.name)}</div>
+      <div class="fw-dim-items">${(d.items || []).map((i) => `<span class="tag">${esc(i)}</span>`).join("")}</div>
+    </div>`).join("") || `<div class="hint">该主题暂无拆解维度</div>`;
+  box.innerHTML = `
+    <div class="fw-block">
+      <h3>📐 主题拆解</h3>
+      <div class="fw-dims">${dims}</div>
+    </div>
+    <div class="fw-block">
+      <h3>💬 表达库（${fw.expressions.length}）</h3>
+      <div class="fw-chips">${fw.expressions.map((e) =>
+        `<button class="angle-chip" data-jump="expressions" data-q="${esc(e.text)}">${esc(e.text)}</button>`).join("") || "无"}</div>
+    </div>
+    <div class="fw-block">
+      <h3>📝 语段（${fw.phrases.length}）</h3>
+      ${fw.phrases.slice(0, 8).map((p) => `<div class="fw-phrase">${esc(p.text)}</div>`).join("") || "无"}
+    </div>
+    <div class="fw-block">
+      <h3>🔥 相关热点（${fw.hotspots.length}）</h3>
+      ${fw.hotspots.slice(0, 6).map((h) => `<div class="fw-item">· ${esc(h.title)}</div>`).join("") || "无"}
+    </div>
+    <div class="fw-block">
+      <h3>🎴 话题卡（${fw.cards.length}）</h3>
+      ${fw.cards.slice(0, 6).map((c) => `<div class="fw-item">· [${esc(c.theme)}] ${esc(c.topic)}</div>`).join("") || "无"}
+    </div>
+    <div class="fw-block">
+      <h3>🧩 案例素材（${fw.cases.length}）</h3>
+      ${fw.cases.slice(0, 6).map((c) => `<div class="fw-item">· ${esc(c.title)}</div>`).join("") || "无"}
+    </div>
+    <div class="fw-block">
+      <h3>🦴 文章结构骨架</h3>
+      <div class="fw-skeleton">
+        <div class="sk-item"><span class="sk-label">开头</span>亮明观点 + 引用金句/排比句（从语段库选 position=开头）</div>
+        <div class="sk-item"><span class="sk-label">分论点</span>3 个分论点：论点句（对仗）+ 素材论证（热点/案例）+ 对策</div>
+        <div class="sk-item"><span class="sk-label">结尾</span>总结升华 + 展望（用可背金句收束）</div>
+      </div>
+    </div>`;
+}
+async function actFrameworkJump(e) {
+  const btn = e.target.closest("[data-jump]");
+  if (!btn) return;
+  switchTab("expressions");
+  $("#ex-q").value = btn.dataset.q || "";
+  await loadExpressions();
+}
+
+/* ================= 复习 ================= */
+async function loadReview() {
+  const r = await api("/api/review");
+  STATE.inReview = {};
+  r.items.forEach((it) => { STATE.inReview[`${it.type}:${it.item_id}`] = true; });
+  const due = await api("/api/review/due");
+  renderReviewDue(due.due);
+  renderReviewRandom(due.random);
+  renderReviewPool(r.items);
+}
+function reviewCard(r) {
+  const c = r.content;
+  const title = c ? (c.title || c.topic || c.text || c.topic || "") : "";
+  const short = c ? (c.可背金句 || c.金句 || c.template || (c.text || "").slice(0, 80) || c.背景 || "") : "";
+  const typeName = { hotspots: "热点", topic_cards: "话题卡", phrases: "语段" }[r.type] || r.type;
+  return `
+    <div class="item rv-item">
+      <div class="item-head">
+        <div class="item-title">[${esc(typeName)}] ${esc(String(title).slice(0, 60))}</div>
+        <span class="tag">第${r.stage || 0}级</span>
+      </div>
+      ${short ? `<div class="item-body"><div class="field"><span class="field-label">回忆点</span>${esc(String(short).slice(0, 120))}</div></div>` : ""}
+      <div class="item-actions">
+        <button class="btn primary small" data-act="answer" data-type="${r.type}" data-id="${r.item_id}" data-result="remember">😀 记住了</button>
+        <button class="btn small" data-act="answer" data-type="${r.type}" data-id="${r.item_id}" data-result="fuzzy">😐 模糊</button>
+        <button class="btn small" data-act="answer" data-type="${r.type}" data-id="${r.item_id}" data-result="forget">😵 忘了</button>
+        <button class="btn danger small" data-act="rv-remove" data-type="${r.type}" data-id="${r.item_id}">移出</button>
+      </div>
+    </div>`;
+}
+function renderReviewDue(due) {
+  const box = $("#rv-due");
+  box.innerHTML = due.length ? due.map(reviewCard).join("")
+    : `<div class="empty">今日无到期复习项 🎉（去各库点「✔ 背完了」加入复习池）</div>`;
+}
+function renderReviewRandom(items) {
+  const box = $("#rv-random");
+  $("#rv-random-title").textContent = items.length ? "随机抽查" : "随机抽查（暂无，先去各库加入复习池）";
+  box.innerHTML = items.length ? items.map(reviewCard).join("") : "";
+}
+function renderReviewPool(items) {
+  const box = $("#rv-pool");
+  if (!items.length) {
+    box.innerHTML = `<div class="empty">复习池为空。在热点/话题卡/语段/表达页点「✔ 背完了」加入。</div>`;
+    return;
+  }
+  box.innerHTML = items.map((r) => {
+    const c = r.content;
+    const title = c ? (c.title || c.topic || c.text || "") : "";
+    const typeName = { hotspots: "热点", topic_cards: "话题卡", phrases: "语段" }[r.type] || r.type;
+    return `<div class="item">
+      <div class="item-head"><div class="item-title">[${esc(typeName)}] ${esc(String(title).slice(0, 50))}</div>
+        <span class="tag">下次 ${esc(r.next_review || "—")}</span></div>
+      <div class="item-actions">
+        <button class="btn small" data-act="rv-remove" data-type="${r.type}" data-id="${r.item_id}">移出复习池</button>
+      </div>
+    </div>`;
+  }).join("");
+}
+async function actReview(act, el) {
+  const type = el.dataset.type, id = el.dataset.id;
+  if (act === "answer") {
+    await api(`/api/review/${type}/${id}/answer`, { method: "POST", body: JSON.stringify({ data: { result: el.dataset.result } }) });
+    toast("已记录");
+  } else if (act === "rv-remove") {
+    await api(`/api/review/${type}/${id}/remove`, { method: "POST" });
+    toast("已移出复习池");
+  } else if (act === "review-add") {
+    await api(`/api/review/${type}/${id}/add`, { method: "POST" });
+    toast("已加入复习池 ✔ 明天开始安排复习");
+  }
+  await loadReviewState();
+  await refreshOverview();
+  if (STATE.tab === "review") await loadReview();
+}
+
+/* ================= AI 拆解弹窗 ================= */
+function openDecompose() {
+  $("#decompose-mask").classList.remove("hidden");
+  $("#dc-desc").value = "";
+  $("#dc-result").innerHTML = "";
+}
+function closeDecompose() {
+  $("#decompose-mask").classList.add("hidden");
+}
+async function runDecompose() {
+  const desc = $("#dc-desc").value.trim();
+  if (!desc) { toast("请先粘贴现象描述"); return; }
+  const btn = $("#dc-run");
+  btn.disabled = true;
+  btn.textContent = "⏳ 拆解中…";
+  try {
+    const r = await api("/api/cases/decompose", { method: "POST", body: JSON.stringify({ data: { description: desc } }) });
+    $("#dc-result").innerHTML = `
+      <div class="dc-block"><b>标题：</b>${esc(r.title || "—")}</div>
+      <div class="dc-block"><b>背景：</b>${esc(r.background || "—")}</div>
+      <div class="dc-block"><b>问题：</b><ul>${(r.problems || []).map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>
+      <div class="dc-block"><b>对策：</b><ul>${(r.measures || []).map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>
+      <div class="dc-block"><b>可用方向：</b>${(r.angles || []).map((x) => `<span class="tag">${esc(x)}</span>`).join("")}</div>
+      <div class="dc-block"><b>主题：</b>${esc(r.theme || "—")}</div>
+      <button class="btn primary" id="dc-save">存入案例库（草稿）</button>`;
+    window.__DC_RESULT__ = r;
+    $("#dc-save").addEventListener("click", async () => {
+      const data = { title: window.__DC_RESULT__.title || desc.slice(0, 15), description: desc,
+        background: window.__DC_RESULT__.background || "", problems: window.__DC_RESULT__.problems || [],
+        measures: window.__DC_RESULT__.measures || [], angles: window.__DC_RESULT__.angles || [],
+        theme: window.__DC_RESULT__.theme || "", date: new Date().toISOString().slice(0, 10) };
+      await api("/api/cases", { method: "POST", body: JSON.stringify({ data }) });
+      toast("已存入案例库（草稿）");
+      closeDecompose();
+    });
+  } catch (e) {
+    $("#dc-result").innerHTML = `<div class="dc-block">拆解失败：${esc(e.message)}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "🤖 开始拆解";
+  }
 }
 
 /* ================= 设置 ================= */
@@ -455,7 +824,10 @@ async function loadSettings() {
   $("#cfg-hot").value = cfg.daily_hotspots || 5;
   $("#cfg-cards").value = cfg.daily_cards || 5;
   $("#cfg-phrases").value = cfg.daily_phrases ?? 3;
+  $("#cfg-random").value = cfg.daily_random ?? 3;
   $("#cfg-catchup").value = cfg.catchup_limit ?? 3;
+  $("#cfg-font-base").value = cfg.font_base ?? 14;
+  $("#cfg-font-emph").value = cfg.font_emphasis ?? 16;
   $("#cfg-hint").textContent = `最近更新：${cfg.last_update_date || "从未"}；语段素材源：${(cfg.phrase_sources || []).map(s => s.name).join("、") || "未配置"}`;
 }
 async function saveSettings() {
@@ -467,11 +839,25 @@ async function saveSettings() {
     daily_hotspots: Math.max(1, Math.min(20, Number($("#cfg-hot").value) || 5)),
     daily_cards: Math.max(1, Math.min(20, Number($("#cfg-cards").value) || 5)),
     daily_phrases: Math.max(0, Math.min(10, Number($("#cfg-phrases").value) || 0)),
+    daily_random: Math.max(0, Math.min(20, Number($("#cfg-random").value) || 0)),
     catchup_limit: Math.max(0, Math.min(7, Number($("#cfg-catchup").value) || 3)),
+    font_base: Math.max(13, Math.min(18, Number($("#cfg-font-base").value) || 14)),
+    font_emphasis: Math.max(14, Math.min(22, Number($("#cfg-font-emph").value) || 16)),
   };
   await api("/api/config", { method: "PUT", body: JSON.stringify({ data }) });
+  applyFonts();
   toast("设置已保存");
   refreshOverview();
+}
+
+/* ---------- 字体应用 ---------- */
+async function applyFonts() {
+  try {
+    const cfg = await api("/api/config");
+    const base = cfg.font_base || 14, emph = cfg.font_emphasis || 16;
+    document.documentElement.style.setProperty("--font-base", base + "px");
+    document.documentElement.style.setProperty("--font-emph", emph + "px");
+  } catch (e) { /* ignore */ }
 }
 
 /* ================= 流水线 ================= */
@@ -482,7 +868,7 @@ async function runPipelineNow() {
   toast("开始生成今日内容，请耐心等待…");
   try {
     const r = await api("/api/pipeline/run", { method: "POST" });
-    if (r.ok) toast(`已生成：热点 ${r.hotspots} 条 / 话题卡 ${r.cards} 张（待审核）`);
+    if (r.ok) toast(`已生成：热点 ${r.hotspots} 条 / 话题卡 ${r.cards} 张 / 语段 ${r.phrases} 条（待审核）`);
     else toast("生成部分失败：" + (r.errors || []).join("；").slice(0, 80));
   } catch (e) {
     toast("生成失败：" + e.message);
@@ -525,7 +911,10 @@ function bindEvents() {
   $("#hs-status").addEventListener("change", loadHotspots);
   $("#hs-list").addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-act]");
-    if (btn) actHotspot(btn.dataset.act, btn.dataset.id);
+    if (btn) {
+      if (btn.dataset.act === "review-add") actReview("review-add", btn);
+      else actHotspot(btn.dataset.act, btn.dataset.id);
+    }
   });
 
   // 话题卡
@@ -536,7 +925,10 @@ function bindEvents() {
   $("#tc-status").addEventListener("change", loadCards);
   $("#tc-list").addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-act]");
-    if (btn) actCard(btn.dataset.act, btn.dataset.id);
+    if (btn) {
+      if (btn.dataset.act === "review-add") actReview("review-add", btn);
+      else actCard(btn.dataset.act, btn.dataset.id);
+    }
   });
 
   // 语段库
@@ -549,16 +941,69 @@ function bindEvents() {
   });
   $("#ph-list").addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-act]");
-    if (btn) actPhrase(btn.dataset.act, btn.dataset.id);
+    if (btn) {
+      if (btn.dataset.act === "review-add") actReview("review-add", btn);
+      else actPhrase(btn.dataset.act, btn.dataset.id);
+    }
   });
   $$(".filters").forEach((g) => g.addEventListener("click", (e) => {
     const chip = e.target.closest(".chip");
     if (!chip) return;
-    const key = chip.dataset.group.replace("f-", "");
+    const gid = chip.dataset.group;
+    if (gid === "f-kind" || gid === "f-extheme") return; // 表达库筛选单独处理
+    const key = gid.replace("f-", "");
     STATE.filters[key] = STATE.filters[key] === chip.dataset.val ? "" : chip.dataset.val;
     applyChipState();
     loadPhrases();
   }));
+
+  // 表达库
+  $("#ex-refresh").addEventListener("click", loadExpressions);
+  $("#ex-add").addEventListener("click", () => openExprModal());
+  $("#ex-q").addEventListener("input", debounce(loadExpressions, 300));
+  $("#ex-collected").addEventListener("change", (e) => {
+    STATE.exFilters.collected = e.target.checked ? "1" : "";
+    loadExpressions();
+  });
+  $("#ex-list").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-act]");
+    if (btn) actExpression(btn.dataset.act, btn.dataset.id);
+  });
+  $("#f-kind").addEventListener("click", (e) => {
+    const chip = e.target.closest(".chip");
+    if (!chip) return;
+    STATE.exFilters.kind = STATE.exFilters.kind === chip.dataset.val ? "" : chip.dataset.val;
+    applyExprChipState();
+    loadExpressions();
+  });
+  $("#f-extheme").addEventListener("click", (e) => {
+    const chip = e.target.closest(".chip");
+    if (!chip) return;
+    STATE.exFilters.theme = STATE.exFilters.theme === chip.dataset.val ? "" : chip.dataset.val;
+    applyExprChipState();
+    loadExpressions();
+  });
+
+  // 框架
+  $("#fw-theme-nav").addEventListener("click", (e) => {
+    const btn = e.target.closest(".fw-theme-btn");
+    if (btn) {
+      STATE.fwTheme = btn.dataset.theme;
+      loadFramework();
+    }
+  });
+  $("#fw-decompose").addEventListener("click", openDecompose);
+  $("#fw-content").addEventListener("click", actFrameworkJump);
+
+  // 复习
+  $("#rv-refresh").addEventListener("click", loadReview);
+  $("#rv-due").addEventListener("click", reviewClickHandler);
+  $("#rv-random").addEventListener("click", reviewClickHandler);
+  $("#rv-pool").addEventListener("click", reviewClickHandler);
+
+  // AI 拆解弹窗
+  $("#decompose-close").addEventListener("click", closeDecompose);
+  $("#dc-run").addEventListener("click", runDecompose);
 
   // 设置
   $("#cfg-save").addEventListener("click", saveSettings);
@@ -572,8 +1017,13 @@ function bindEvents() {
     if (k === "hotspot") saveHotspotModal();
     else if (k === "card") saveCardModal();
     else if (k === "phrase") savePhraseModal();
+    else if (k === "expression") saveExprModal();
   });
   $("#modal-mask").addEventListener("click", (e) => { if (e.target.id === "modal-mask") hideModal(); });
+}
+function reviewClickHandler(e) {
+  const btn = e.target.closest("button[data-act]");
+  if (btn) actReview(btn.dataset.act, btn);
 }
 function debounce(fn, ms) {
   let t;
@@ -584,7 +1034,10 @@ function debounce(fn, ms) {
 (async function init() {
   bindEvents();
   renderFilterBar();
+  renderExprFilterBar();
+  await applyFonts();
   await loadThemes();
+  await loadReviewState();
   await refreshOverview();
   switchTab("hotspots");
   setInterval(refreshOverview, 30000);

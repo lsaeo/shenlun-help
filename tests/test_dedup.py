@@ -17,15 +17,21 @@ class FakeLLM:
     def __init__(self):
         self.hot_calls = 0
         self.card_calls = 0
+        self.pick_calls = 0
+
+    def pick_hotspots(self, candidates):
+        self.pick_calls += 1
+        return candidates[:2]
 
     def analyze_hotspot(self, title, summary, source=""):
         self.hot_calls += 1
-        return {"意义": f"意义-{title}", "角度": ["角度1"], "对策": ["对策1"], "金句": "金句"}
+        return {"重点提炼": ["要点"], "可背金句": "金句", "意义": f"意义-{title}",
+                "角度": ["角度1"], "对策": ["对策1"], "金句": "金句", "angles": ["可用方向"]}
 
     def generate_topic_card(self, theme):
         self.card_calls += 1
         return {"topic": f"{theme}话题", "背景": "背景", "意义": "意义",
-                "问题": "问题", "对策": ["对策"], "金句": "金句"}
+                "问题": "问题", "对策": ["对策"], "金句": "金句", "angles": ["可用方向"]}
 
     def format_phrase(self, raw_text):
         return {"text": f"整理后-{raw_text[:20]}", "template": "____模板____",

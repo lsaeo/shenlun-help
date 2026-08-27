@@ -140,6 +140,137 @@ def create_app(store: JsonStore, pipeline: Pipeline) -> FastAPI:
             raise HTTPException(404, "记录不存在")
         return updated
 
+    # ---------- 表达库 ----------
+    @app.get("/api/expressions/filter")
+    def filter_expressions(kind: str = "", theme: str = "", q: str = "", collected: str = ""):
+        items = store.list_all("expressions")
+        if kind:
+            items = [it for it in items if kind in it.get("kind", [])]
+        if theme:
+            items = [it for it in items if theme in it.get("theme", [])]
+        if collected == "1":
+            items = [it for it in items if it.get("collected")]
+        if q:
+            ql = q.lower()
+            items = [it for it in items if ql in str(it.get("text", "")).lower()
+                     or ql in str(it.get("example", "")).lower()]
+        return {"items": items}
+
+    register_crud("/api/expressions", "expressions", "/api/expressions")
+
+    @app.post("/api/expressions/{item_id}/toggle-collect")
+    def toggle_expr_collect(item_id: str):
+        _require("expressions", item_id, store)
+        updated = store.toggle_expr_collect(item_id)
+        if updated is None:
+            raise HTTPException(404, "记录不存在")
+        return updated
+
+    # ---------- 案例库（AI 辅助拆解产物） ----------
+    register_crud("/api/cases", "cases", "/api/cases")
+
+    @app.post("/api/cases/decompose")
+    def decompose_case(body: GenericBody):
+        """AI 辅助拆解：粘贴现象描述 → 结构化拆解草稿。"""
+        desc = str(body.data.get("description", "")).strip()
+        if not desc:
+            raise HTTPException(400, "描述不能为空")
+        if not pipeline.llm.configured:
+            raise HTTPException(400, "未配置 API Key，无法使用 AI 拆解")
+        result = {}
+        def _run():
+            nonlocal result
+            try:
+                result = pipeline.llm.decompose_case(desc)
+            except Exception as e:  # noqa: BLE001
+                result = {"error": str(e)}
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        t.join(timeout=180)
+        if result.get("error"):
+            raise HTTPException(502, result["error"])
+        return result
+
+    # ---------- 复习系统 ----------
+    @app.get("/api/review")
+    def review_list():
+        items = store.review_all()
+        # 附内容摘要
+        enriched = []
+        for r in items:
+            it = store.get(r["type"], r["item_id"])
+            enriched.append({**r, "content": it})
+        return {"items": enriched, "progress": store.review_progress()}
+
+    @app.post("/api/review/{item_type}/{item_id}/add")
+    def review_add(item_type: str, item_id: str):
+        _require(item_type, item_id, store)
+        return store.add_to_review(item_type, item_id)
+
+    @app.post("/api/review/{item_type}/{item_id}/answer")
+    def review_answer(item_type: str, item_id: str, body: GenericBody):
+        result = body.data.get("result", "")
+        if result not in ("remember", "fuzzy", "forget"):
+            raise HTTPException(400, "result 必须是 remember/fuzzy/forget")
+        updated = store.review_answer(item_type, item_id, result)
+        if updated is None:
+            raise HTTPException(404, "该内容不在复习池中")
+        return updated
+
+    @app.post("/api/review/{item_type}/{item_id}/remove")
+    def review_remove(item_type: str, item_id: str):
+        store.remove_from_review(item_type, item_id)
+        return {"ok": True}
+
+    @app.get("/api/review/due")
+    def review_due():
+        due = store.due_review()
+        rand = store.random_review(store.get_config().get("daily_random", 3))
+        return {"due": due, "random": rand}
+
+    @app.put("/api/review/progress")
+    def review_progress_save(body: GenericBody):
+        store.set_review_progress(body.data)
+        return {"ok": True}
+
+    # ---------- 话题拆解树 ----------
+    @app.get("/api/topics")
+    def list_topics():
+        return {"items": store.list_topics()}
+
+    @app.put("/api/topics/{theme}")
+    def upsert_topic(theme: str, body: GenericBody):
+        dims = body.data.get("dimensions", [])
+        if not isinstance(dims, list):
+            raise HTTPException(400, "dimensions 必须是数组")
+        return store.upsert_topic(theme, dims)
+
+    # ---------- 框架聚合：某主题下的全部素材 ----------
+    @app.get("/api/framework/{theme}")
+    def framework(theme: str):
+        """聚合某主题下的：表达库、语段、热点、话题卡、案例、拆解维度。"""
+        topic = store.get_topic(theme)
+        expressions = [e for e in store.list_all("expressions")
+                       if theme in e.get("theme", []) and e.get("status") != "草稿"]
+        phrases = [p for p in store.list_all("phrases")
+                   if theme in p.get("theme", [])]
+        hotspots = [h for h in store.list_all("hotspots")
+                    if h.get("status") == "已入库" and theme in (h.get("angles", []) or []) or
+                    (h.get("theme") == theme)]
+        cards = [c for c in store.list_all("topic_cards")
+                 if c.get("status") == "已入库" and c.get("theme") == theme]
+        cases = [c for c in store.list_all("cases")
+                 if c.get("theme") == theme and c.get("status") != "草稿"]
+        return {
+            "theme": theme,
+            "topic": topic,
+            "expressions": expressions,
+            "phrases": phrases,
+            "hotspots": hotspots,
+            "cards": cards,
+            "cases": cases,
+        }
+
     # ---------- 配置 ----------
     @app.get("/api/config")
     def get_config():
