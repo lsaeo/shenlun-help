@@ -847,16 +847,23 @@ async function loadFanwen() {
     $("#fanwen-stats").innerHTML =
       `📊 本地范文：共 <b>${s.total || 0}</b> 篇 ｜ 待解析 <b class="hl-em">${s.pending || 0}</b> ｜ ` +
       `已解析 ${s.resolved || 0} ｜ 已跳过 ${s.skipped || 0}`;
-    const fl = (files.files || []).map((f) =>
-      `<button class="btn small" data-act="fanwen-parse-file" data-path="${esc(f.path)}" data-name="${esc(f.name)}">📄 ${esc(f.name)}</button>`).join("");
+    // 进度条
+    const pct = s.total ? Math.round(((s.resolved + s.skipped) / s.total) * 100) : 0;
+    $("#fanwen-progress-bar").style.setProperty("--pct", pct + "%");
+    $("#fanwen-progress-text").textContent = `进度 ${pct}%（已解析 ${s.resolved || 0} / ${s.total || 0}）`;
+    // 文件列表：in_index=true 灰色不可点（已在轮转队列），false 绿色可点击
+    const fl = (files.files || []).map((f) => f.in_index
+      ? `<button class="btn small disabled" disabled title="已在每日轮转队列，将自动解析">📄 ${esc(f.name)}</button>`
+      : `<button class="btn small new-file" data-act="fanwen-parse-file" data-path="${esc(f.path)}" data-name="${esc(f.name)}">📄 ${esc(f.name)}</button>`).join("");
     $("#fanwen-file-list").innerHTML = fl || `<span class="hint">sucai/ 下暂无可解析文件</span>`;
-    // 展示轮转队列前若干篇状态
+    // 轮转队列：左=已完成，右=待解析（全部显示，各自滚动）
     const items = r.items || [];
-    const rows = items.slice(0, 15).map((a) => {
-      const st = a.status === "已解析" ? "published" : a.status === "已跳过" ? "draft" : "";
-      return `<div class="fw-item">${statusTag(a.status || "待解析")} ${esc((a.title || "").slice(0, 40))}</div>`;
-    }).join("");
-    $("#fanwen-queue").innerHTML = rows || `<div class="hint">暂无范文索引，运行流水线后自动建立</div>`;
+    const done = items.filter((a) => a.status !== "待解析").map((a) =>
+      `<div class="fw-item">${statusTag(a.status || "待解析")} ${esc((a.title || "").slice(0, 45))}</div>`).join("");
+    const pending = items.filter((a) => a.status === "待解析").map((a) =>
+      `<div class="fw-item">${statusTag("待解析")} ${esc((a.title || "").slice(0, 45))}</div>`).join("");
+    $("#fanwen-queue-done").innerHTML = done || `<div class="hint">暂无</div>`;
+    $("#fanwen-queue-pending").innerHTML = pending || `<div class="hint">全部完成 🎉</div>`;
   } catch (e) {
     $("#fanwen-stats").textContent = "加载失败：" + e.message;
   }
@@ -1099,6 +1106,19 @@ async function runCatchup() {
   refreshOverview();
 }
 
+/* ================= 一键入库 ================= */
+async function publishAll(apiBase, refreshFn) {
+  if (!confirm("确定将本库全部草稿入库？")) return;
+  try {
+    const r = await api(`${apiBase}/publish-all`, { method: "POST" });
+    toast(`已入库 ${r.published} 条`);
+  } catch (e) {
+    toast("入库失败：" + e.message);
+  }
+  await refreshFn();
+  refreshOverview();
+}
+
 /* ================= 弹窗 ================= */
 function showModal() { $("#modal-mask").classList.remove("hidden"); }
 function hideModal() {
@@ -1112,6 +1132,7 @@ function bindEvents() {
 
   // 热点
   $("#hs-refresh").addEventListener("click", loadHotspots);
+  $("#hs-publish-all").addEventListener("click", () => publishAll("/api/hotspots", loadHotspots));
   $("#hs-add").addEventListener("click", () => openHotspotModal());
   $("#hs-run").addEventListener("click", runPipelineNow);
   $("#hs-q").addEventListener("input", debounce(loadHotspots, 300));
@@ -1127,6 +1148,7 @@ function bindEvents() {
 
   // 话题卡
   $("#tc-refresh").addEventListener("click", loadCards);
+  $("#tc-publish-all").addEventListener("click", () => publishAll("/api/topic_cards", loadCards));
   $("#tc-add").addEventListener("click", () => openCardModal());
   $("#tc-q").addEventListener("input", debounce(loadCards, 300));
   $("#tc-theme").addEventListener("change", loadCards);
@@ -1141,6 +1163,7 @@ function bindEvents() {
 
   // 语段库
   $("#ph-refresh").addEventListener("click", loadPhrases);
+  $("#ph-publish-all").addEventListener("click", () => publishAll("/api/phrases", loadPhrases));
   $("#ph-add").addEventListener("click", () => openPhraseModal());
   $("#ph-q").addEventListener("input", debounce(loadPhrases, 300));
   $("#ph-collected").addEventListener("change", (e) => {
@@ -1167,6 +1190,7 @@ function bindEvents() {
 
   // 表达库
   $("#ex-refresh").addEventListener("click", loadExpressions);
+  $("#ex-publish-all").addEventListener("click", () => publishAll("/api/expressions", loadExpressions));
   $("#ex-add").addEventListener("click", () => openExprModal());
   $("#ex-q").addEventListener("input", debounce(loadExpressions, 300));
   $("#ex-collected").addEventListener("change", (e) => {

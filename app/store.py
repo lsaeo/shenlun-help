@@ -295,6 +295,18 @@ class JsonStore:
                     return copy.deepcopy(it)
         return None
 
+    def publish_all_drafts(self, name: str) -> int:
+        """一键入库：该集合所有草稿标记为已入库。返回入库条数。"""
+        with self._lock:
+            n = 0
+            for it in self._coll(name):
+                if it.get("status") == "草稿":
+                    it["status"] = "已入库"
+                    n += 1
+            if n:
+                self._save(name)
+            return n
+
     # ---------- 语段库专属 ----------
 
     def toggle_collect(self, phrase_id: str) -> dict | None:

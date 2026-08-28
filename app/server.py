@@ -102,6 +102,12 @@ def create_app(store: JsonStore, pipeline: Pipeline) -> FastAPI:
                 raise HTTPException(400, f"未知审核动作: {body.action}")
             return updated
 
+        @app.post(f"{prefix}/publish-all")
+        def publish_all():
+            """一键入库：该库所有草稿 → 已入库。"""
+            n = store.publish_all_drafts(name)
+            return {"published": n}
+
     register_crud("/api/hotspots", "hotspots", "/api/hotspots")
     register_crud("/api/topic_cards", "topic_cards", "/api/topic_cards")
     # 注意：/api/phrases/filter 必须注册在 /api/phrases/{item_id} 之前，
@@ -157,6 +163,11 @@ def create_app(store: JsonStore, pipeline: Pipeline) -> FastAPI:
             ql = q.lower()
             items = [it for it in items if ql in str(it.get("text", "")).lower()
                      or ql in str(it.get("example", "")).lower()]
+        # 新生成的（带 date）按日期倒序在前，种子（无 date）排后面
+        items.sort(key=lambda it: (it.get("date") is None, it.get("date", "")), reverse=False)
+        items = sorted(items, key=lambda it: it.get("date") is not None, reverse=True)
+        items = sorted([it for it in items if it.get("date")], key=lambda it: it["date"], reverse=True) + \
+                [it for it in items if not it.get("date")]
         return {"items": items}
 
     @app.get("/api/expressions/locate")
@@ -353,15 +364,24 @@ def create_app(store: JsonStore, pipeline: Pipeline) -> FastAPI:
 
     @app.get("/api/fanwen/list-files")
     def fanwen_list_files():
-        """列出 sucai 下可解析的文件（供前端展示）。"""
+        """列出 sucai 下可解析的文件。
+
+        in_index=True 的文件已在每日轮转索引中（灰色不可手动解析，
+        由流水线自动逐日解析）；False 为新加入文件，可点击手动解析。
+        """
         sucai_dir = _sucai_dir()
+        indexed = {a.get("file") for a in store.fanwen_index()}
         files = []
         if sucai_dir.is_dir():
             for fn in sorted(sucai_dir.iterdir()):
                 if fn.name.startswith("~$"):
                     continue
                 if fn.suffix.lower() in (".docx", ".txt", ".xml", ".docm"):
-                    files.append({"name": fn.name, "path": str(fn)})
+                    files.append({
+                        "name": fn.name,
+                        "path": str(fn),
+                        "in_index": fn.name in indexed,
+                    })
         return {"files": files}
 
     # ---------- 配置 ----------
