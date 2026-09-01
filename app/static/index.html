@@ -168,6 +168,7 @@
         <select id="cfg-provider" style="padding:9px 12px" onchange="toggleProviderConfig()">
           <option value="deepseek">DeepSeek API</option>
           <option value="gemini">Google Gemini</option>
+          <option value="custom">自定义中转站</option>
         </select>
       </label>
       <div id="cfg-block-deepseek">
@@ -198,6 +199,22 @@
           </datalist>
         </label>
         <p class="hint">模型可自由输入自定义值（如新版模型名）。Key 在 <a href="https://aistudio.google.com/apikey" target="_blank">Google AI Studio</a> 免费申请。</p>
+      </div>
+      <div id="cfg-block-custom" class="hidden">
+        <label>中转站 API 地址
+          <input id="cfg-custom-base" type="text" placeholder="https://api.gemai.cc/v1">
+        </label>
+        <label>中转站 API Key
+          <input id="cfg-custom-key" type="password" placeholder="sk-...">
+        </label>
+        <label>中转站模型名
+          <input id="cfg-custom-model" type="text" list="cm-models" placeholder="[premium]gemini-2.5-flash">
+          <datalist id="cm-models">
+            <option value="[premium]gemini-2.5-flash">中转站 Gemini 2.5 Flash（实测可用）</option>
+            <option value="[premium]gemini-2.5-pro">中转站 Gemini 2.5 Pro</option>
+          </datalist>
+        </label>
+        <p class="hint">OpenAI 兼容格式的中转站：填服务商给的 API 地址、Key 和模型名（模型名以服务商列表为准）。</p>
       </div>
       <h2>每日更新</h2>
       <label>更新时间

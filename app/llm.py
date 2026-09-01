@@ -313,17 +313,22 @@ class DeepSeekClient(BaseLLMClient):
         if not self.configured:
             raise LLMError("未配置 API Key，请在「设置」中填写")
         url = f"{self.api_base}/chat/completions"
-        payload = {
+        base_payload = {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
             "temperature": 0.7,
-            "response_format": {"type": "json_object"},
         }
+        # 第三方中转站常不稳定（SSL 中断/限流），重试 4 次 + 指数退避；
+        # response_format 部分中转站不支持，失败后降级去掉再试。
         last_err: Exception | None = None
-        for attempt in range(2):
+        import time as _time
+        for attempt in range(4):
+            payload = dict(base_payload)
+            if attempt < 2:
+                payload["response_format"] = {"type": "json_object"}
             try:
                 resp = httpx.post(
                     url,
@@ -334,8 +339,9 @@ class DeepSeekClient(BaseLLMClient):
                 resp.raise_for_status()
                 content = resp.json()["choices"][0]["message"]["content"]
                 return _json_from_text(content)
-            except Exception as e:  # noqa: BLE001 —— 网络/JSON 错误统一重试一次
+            except Exception as e:  # noqa: BLE001 —— 网络/JSON 错误重试
                 last_err = e
+                _time.sleep(2 ** attempt)  # 1s, 2s, 4s, 8s
         raise LLMError(f"LLM 调用失败: {last_err}")
 
 
@@ -405,8 +411,19 @@ class GeminiClient(BaseLLMClient):
 
 
 def build_llm_client(cfg: dict) -> BaseLLMClient:
-    """按 ai_provider 配置构建 LLM 客户端。"""
+    """按 ai_provider 配置构建 LLM 客户端。
+
+    - deepseek : DeepSeek 官方 API（OpenAI 兼容）
+    - gemini   : Google Gemini generateContent
+    - custom   : 第三方中转站（OpenAI 兼容，base/key/model 全自定义）
+    """
     provider = cfg.get("ai_provider", "deepseek")
     if provider == "gemini":
         return GeminiClient(cfg.get("gemini_api_key", ""), cfg.get("gemini_model", "gemini-2.0-flash"))
+    if provider == "custom":
+        return DeepSeekClient(
+            cfg.get("custom_api_key", ""),
+            cfg.get("custom_api_base", "https://api.gemai.cc/v1"),
+            cfg.get("custom_model", "[premium]gemini-2.5-flash"),
+        )
     return DeepSeekClient(cfg.get("api_key", ""), cfg.get("api_base", ""), cfg.get("model", ""))
