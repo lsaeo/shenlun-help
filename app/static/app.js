@@ -1022,7 +1022,7 @@ async function loadSettings() {
   $("#cfg-gemini-model").value = cfg.gemini_model || "gemini-2.0-flash";
   $("#cfg-custom-base").value = cfg.custom_api_base || "https://api.gemai.cc/v1";
   $("#cfg-custom-key").value = cfg.custom_api_key || "";
-  $("#cfg-custom-model").value = cfg.custom_model || "[premium]gemini-2.5-flash";
+  $("#cfg-custom-model").value = cfg.custom_model || "[福利]gemini-3.5-flash";
   toggleProviderConfig();
   $("#cfg-time").value = cfg.update_time || "07:00";
   $("#cfg-hot").value = cfg.daily_hotspots || 5;
@@ -1053,7 +1053,7 @@ async function saveSettings() {
     gemini_model: $("#cfg-gemini-model").value.trim() || "gemini-2.0-flash",
     custom_api_base: $("#cfg-custom-base").value.trim() || "https://api.gemai.cc/v1",
     custom_api_key: $("#cfg-custom-key").value.trim(),
-    custom_model: $("#cfg-custom-model").value.trim() || "[premium]gemini-2.5-flash",
+    custom_model: $("#cfg-custom-model").value.trim() || "[福利]gemini-3.5-flash",
     update_time: $("#cfg-time").value || "07:00",
     daily_hotspots: Math.max(1, Math.min(20, Number($("#cfg-hot").value) || 5)),
     daily_cards: Math.max(1, Math.min(20, Number($("#cfg-cards").value) || 5)),

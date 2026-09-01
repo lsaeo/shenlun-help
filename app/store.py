@@ -33,7 +33,7 @@ DEFAULT_CONFIG = {
     "gemini_model": "gemini-2.0-flash",
     "custom_api_key": "",
     "custom_api_base": "https://api.gemai.cc/v1",
-    "custom_model": "[premium]gemini-2.5-flash",
+    "custom_model": "[福利]gemini-3.5-flash",  # 实测可用；官逆C系列为搜索/thinking变体不适用
     "update_time": "07:00",
     "daily_hotspots": 5,
     "daily_cards": 5,

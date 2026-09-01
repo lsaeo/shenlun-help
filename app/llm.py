@@ -424,6 +424,6 @@ def build_llm_client(cfg: dict) -> BaseLLMClient:
         return DeepSeekClient(
             cfg.get("custom_api_key", ""),
             cfg.get("custom_api_base", "https://api.gemai.cc/v1"),
-            cfg.get("custom_model", "[premium]gemini-2.5-flash"),
+            cfg.get("custom_model", "[福利]gemini-3.5-flash"),
         )
     return DeepSeekClient(cfg.get("api_key", ""), cfg.get("api_base", ""), cfg.get("model", ""))
