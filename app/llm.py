@@ -321,11 +321,12 @@ class DeepSeekClient(BaseLLMClient):
             ],
             "temperature": 0.7,
         }
-        # 第三方中转站常不稳定（SSL 中断/限流），重试 4 次 + 指数退避；
+        # 第三方中转站常不稳定（SSL 中断/连接重置 10054/限流），
+        # 重试 6 次 + 指数退避（1/2/4/8/16/20s）；
         # response_format 部分中转站不支持，失败后降级去掉再试。
         last_err: Exception | None = None
         import time as _time
-        for attempt in range(4):
+        for attempt in range(6):
             payload = dict(base_payload)
             if attempt < 2:
                 payload["response_format"] = {"type": "json_object"}
@@ -341,7 +342,8 @@ class DeepSeekClient(BaseLLMClient):
                 return _json_from_text(content)
             except Exception as e:  # noqa: BLE001 —— 网络/JSON 错误重试
                 last_err = e
-                _time.sleep(2 ** attempt)  # 1s, 2s, 4s, 8s
+                # 连接被重置/SSL 中断属于瞬时错误，重试前稍等让中转站恢复
+                _time.sleep(min(2 ** attempt, 20))  # 1,2,4,8,16,20s
         raise LLMError(f"LLM 调用失败: {last_err}")
 
 

@@ -46,10 +46,25 @@ class Pipeline:
         self.llm = llm
         self._running = False
         self._last_provider = getattr(llm, "model", "")  # 用于变更检测
+        self._llm_fail_count = 0  # 本轮流水线内 LLM 连续失败次数（熔断用）
 
     @property
     def running(self) -> bool:
         return self._running
+
+    def _llm_failed(self, e: Exception) -> bool:
+        """记录一次 LLM 失败；连续失败达 3 次返回 True（应熔断跳过剩余任务）。"""
+        self._llm_fail_count += 1
+        log.warning("LLM 调用失败(第%d次): %s", self._llm_fail_count, e)
+        return self._llm_fail_count >= 3
+
+    def _llm_ok(self):
+        """LLM 调用成功，重置失败计数。"""
+        self._llm_fail_count = 0
+
+    def _llm_healthy(self) -> bool:
+        """本轮是否仍允许继续调 LLM（熔断后返回 False）。"""
+        return self._llm_fail_count < 3
 
     def refresh_client(self):
         """按当前 config 的 ai_provider 重建 LLM 客户端（设置切换后生效）。"""
@@ -117,8 +132,11 @@ class Pipeline:
                                 **analysis,
                             })
                             result["hotspots"] += 1
+                            self._llm_ok()
                         except LLMError as e:
                             result["errors"].append(f"热点分析失败（{item['title'][:15]}…）：{e}")
+                            if self._llm_failed(e):
+                                break  # 熔断：停止剩余热点分析
                 else:
                     result["errors"].append("新闻抓取失败或无近14天新闻，已跳过热点生成（可手动录入）")
             else:
@@ -145,12 +163,15 @@ class Pipeline:
                         **card,
                     })
                     result["cards"] += 1
+                    self._llm_ok()
                 except LLMError as e:
                     result["errors"].append(f"话题卡生成失败（{theme}）：{e}")
+                    if self._llm_failed(e):
+                        break  # 熔断：停止剩余话题卡
 
             # 3) 语段搜集：素材页 → AI 改稿 → 去重 → 草稿
             phrase_count = cfg.get("daily_phrases", 3)
-            if phrase_count > 0:
+            if phrase_count > 0 and self._llm_healthy():
                 try:
                     result["phrases"] = self._collect_phrases(
                         cfg.get("phrase_sources", []), phrase_count, progress)
@@ -160,7 +181,7 @@ class Pipeline:
 
             # 3.5) 表达搜集：素材页 → AI 提炼 → 去重 → 草稿
             expr_count = cfg.get("daily_expressions", 3)
-            if expr_count > 0:
+            if expr_count > 0 and self._llm_healthy():
                 try:
                     result["expressions"] = self._collect_expressions(
                         cfg.get("expr_sources", []), expr_count, progress)
@@ -170,7 +191,7 @@ class Pipeline:
 
             # 3.6) 案例搜集：素材页 → AI 拆解 → 去重 → 草稿
             case_count = cfg.get("daily_cases", 2)
-            if case_count > 0:
+            if case_count > 0 and self._llm_healthy():
                 try:
                     result["cases"] = self._collect_cases(
                         cfg.get("phrase_sources", []), case_count, progress)
@@ -179,7 +200,7 @@ class Pipeline:
                     result["errors"].append(f"案例搜集失败：{e}")
 
             # 4) 范文候选：按节奏抓取（仅当天，不进补拉）
-            if target == today_str():
+            if target == today_str() and self._llm_healthy():
                 self._maybe_fetch_fanwen(cfg, progress, result)
 
             # 5) 更新 last_update_date：只有真正生成了内容才推进，
@@ -195,6 +216,7 @@ class Pipeline:
             return result
         finally:
             self._running = False
+            self._llm_fail_count = 0  # 本轮结束重置熔断计数
 
     def _collect_phrases(self, sources: list[dict], limit: int, progress=None) -> int:
         """从素材页抓候选语段 → 与库内去重 → AI 改稿 → 写草稿。返回新增条数。"""
@@ -239,8 +261,15 @@ class Pipeline:
                         "used_count": 0,
                     })
                     added += 1
+                    self._llm_ok()
                 except LLMError as e:
+                    # LLM 失败：若连续失败达 3 次则熔断，停止剩余候选（避免对
+                    # 每个候选反复重试拖垮整轮流水线）
                     log.warning("语段改稿失败: %s", e)
+                    if self._llm_failed(e):
+                        result = self.store.get_config()
+                        log.error("LLM 连续失败，熔断语段搜集")
+                        return added
         return added
 
     def _collect_expressions(self, sources: list[dict], limit: int, progress=None) -> int:
@@ -267,6 +296,9 @@ class Pipeline:
                     exprs = self.llm.extract_expressions(cand)
                 except LLMError as e:
                     log.warning("表达提炼失败: %s", e)
+                    if self._llm_failed(e):
+                        log.error("LLM 连续失败，熔断表达搜集")
+                        return added
                     continue
                 for ex in exprs:
                     if added >= limit:
@@ -281,6 +313,7 @@ class Pipeline:
                         "collected": False,
                     })
                     added += 1
+                    self._llm_ok()
         return added
 
     def _collect_cases(self, sources: list[dict], limit: int, progress=None) -> int:
@@ -307,6 +340,9 @@ class Pipeline:
                     case = self.llm.decompose_case(cand)
                 except LLMError as e:
                     log.warning("案例拆解失败: %s", e)
+                    if self._llm_failed(e):
+                        log.error("LLM 连续失败，熔断案例搜集")
+                        return added
                     continue
                 if not case.get("title") or case["title"] in existing:
                     continue
@@ -318,6 +354,7 @@ class Pipeline:
                     **case,
                 })
                 added += 1
+                self._llm_ok()
         return added
 
     def _resolve_fanwen_from_file(self, path: str, title: str = "") -> dict:
@@ -376,9 +413,11 @@ class Pipeline:
             if result is not None:
                 result["fanwen_resolved"] = nxt.get("title", "")
             log.info("范文已解析: %s", nxt.get("title", ""))
+            self._llm_ok()
             return 1
         except LLMError as e:
             log.warning("范文解析失败: %s", e)
+            self._llm_failed(e)
             # 解析失败不标记已解析，下次重试（但防止死循环：本次失败就跳过本轮）
             if result is not None:
                 result["errors"].append(f"范文解析失败：{e}")
