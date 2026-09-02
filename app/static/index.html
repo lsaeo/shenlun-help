@@ -38,6 +38,15 @@
       <button id="hs-add" class="btn primary">＋ 手动录入</button>
       <button id="hs-run" class="btn accent">⚡ 立即生成今日</button>
     </div>
+    <div id="pipeline-progress" class="pipeline-progress hidden">
+      <div class="pp-top">
+        <span class="pp-step" id="pp-step">步骤</span>
+        <span class="pp-msg" id="pp-msg"></span>
+        <span class="pp-time" id="pp-time"></span>
+      </div>
+      <div class="pp-bar"><div class="pp-bar-fill" id="pp-bar"></div></div>
+      <div class="pp-actions" id="pp-actions"></div>
+    </div>
     <div id="hs-list" class="card-list"></div>
   </section>
 
@@ -258,7 +267,9 @@
       <div class="row">
         <button id="cfg-save" class="btn primary">保存设置</button>
         <button id="cfg-catch-run" class="btn accent">⚡ 补拉缺失天数</button>
+        <button id="cfg-rerun" class="btn primary">🔄 重跑全部任务</button>
       </div>
+      <div id="cfg-progress-wrap"></div>
       <p class="hint" id="cfg-hint"></p>
     </div>
   </section>

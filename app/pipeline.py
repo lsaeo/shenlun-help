@@ -52,6 +52,15 @@ class Pipeline:
     def running(self) -> bool:
         return self._running
 
+    def _report(self, step: str = "", message: str = "", done: int = 0, total: int = 0,
+                progress=None, state: str = "running"):
+        """统一进度上报：写 store 状态（前端轮询读）+ 调本地回调。"""
+        if step:
+            self.store.set_pipeline_status(state=state, step=step, message=message,
+                                           done=done, total=total)
+        if progress and message:
+            progress(message)
+
     def _llm_failed(self, e: Exception) -> bool:
         """记录一次 LLM 失败；连续失败达 3 次返回 True（应熔断跳过剩余任务）。"""
         self._llm_fail_count += 1
@@ -95,6 +104,8 @@ class Pipeline:
         # 当天已生成的卡片主题（同日不重复，次日重新生成）
         existing_card_themes = {it.get("theme", "") for it in self.store.list_all("topic_cards")
                                 if it.get("date") == target}
+        # 进度状态：前端轮询用
+        self.store.set_pipeline_status(state="running", step="开始", message="流水线启动", done=0, total=6)
         try:
             # 1) 真实热点：只有当天才抓新闻 → AI 挑选重点 → 逐条分析
             if target == today_str():
@@ -105,19 +116,20 @@ class Pipeline:
                 if candidates:
                     # 先过滤已入库的标题，减少 AI 挑选负担
                     fresh_cands = [c for c in candidates if c["title"] not in existing_hot_titles]
-                    if progress:
-                        progress(f"候选新闻 {len(fresh_cands)} 条，AI 挑选重点…")
+                    self._report(step="1/6 热点挑选", message=f"候选新闻 {len(fresh_cands)} 条，AI 挑选重点…",
+                                 progress=progress)
                     picked = self._pick_hotspots(fresh_cands, cfg.get("daily_hotspots", 5))
                     if not picked and fresh_cands:
                         # AI 挑选失败（无 key/超时）→ 降级：按最新日期取前 N 条
                         picked = fresh_cands[: cfg.get("daily_hotspots", 5)]
                         result["errors"].append("AI 挑选失败，已降级按最新新闻取前几条")
-                    for item in picked:
+                    picked_n = len(picked)
+                    for idx, item in enumerate(picked, 1):
                         if item["title"] in existing_hot_titles:
                             continue
                         existing_hot_titles.add(item["title"])
-                        if progress:
-                            progress(f"分析热点：{item['title'][:20]}…")
+                        self._report(step="1/6 热点分析", message=f"分析热点 {idx}/{picked_n}：{item['title'][:15]}…",
+                                     done=idx, total=picked_n, progress=progress)
                         try:
                             analysis = self.llm.analyze_hotspot(
                                 item["title"], item.get("summary", ""), item.get("source", ""))
@@ -136,6 +148,9 @@ class Pipeline:
                         except LLMError as e:
                             result["errors"].append(f"热点分析失败（{item['title'][:15]}…）：{e}")
                             if self._llm_failed(e):
+                                result["stopped_reason"] = "api_failed"
+                                self._report(step="⚠️ API 不可用", message=f"API 连续失败：{e}",
+                                             state="stopped", progress=progress)
                                 break  # 熔断：停止剩余热点分析
                 else:
                     result["errors"].append("新闻抓取失败或无近14天新闻，已跳过热点生成（可手动录入）")
@@ -145,9 +160,9 @@ class Pipeline:
             # 2) 话题卡：主题轮转（该主题已有卡则跳过，避免同日重复）
             count = cfg.get("daily_cards", 5)
             themes = self._pick_themes(count, target)
-            for theme in themes:
-                if progress:
-                    progress(f"生成话题卡：{theme}…")
+            for t_idx, theme in enumerate(themes, 1):
+                self._report(step="2/6 话题卡", message=f"生成话题卡 {t_idx}/{len(themes)}：{theme}…",
+                             done=t_idx, total=len(themes), progress=progress)
                 if theme in existing_card_themes:
                     continue  # 该主题已生成过，跳过
                 existing_card_themes.add(theme)
@@ -167,11 +182,15 @@ class Pipeline:
                 except LLMError as e:
                     result["errors"].append(f"话题卡生成失败（{theme}）：{e}")
                     if self._llm_failed(e):
+                        result["stopped_reason"] = "api_failed"
+                        self._report(step="⚠️ API 不可用", message=f"API 连续失败：{e}",
+                                     state="stopped", progress=progress)
                         break  # 熔断：停止剩余话题卡
 
             # 3) 语段搜集：素材页 → AI 改稿 → 去重 → 草稿
             phrase_count = cfg.get("daily_phrases", 3)
             if phrase_count > 0 and self._llm_healthy():
+                self._report(step="3/6 语段搜集", message="开始搜集语段素材…", progress=progress)
                 try:
                     result["phrases"] = self._collect_phrases(
                         cfg.get("phrase_sources", []), phrase_count, progress)
@@ -182,6 +201,7 @@ class Pipeline:
             # 3.5) 表达搜集：素材页 → AI 提炼 → 去重 → 草稿
             expr_count = cfg.get("daily_expressions", 3)
             if expr_count > 0 and self._llm_healthy():
+                self._report(step="4/6 表达提炼", message="开始提炼表达…", progress=progress)
                 try:
                     result["expressions"] = self._collect_expressions(
                         cfg.get("expr_sources", []), expr_count, progress)
@@ -192,6 +212,7 @@ class Pipeline:
             # 3.6) 案例搜集：素材页 → AI 拆解 → 去重 → 草稿
             case_count = cfg.get("daily_cases", 2)
             if case_count > 0 and self._llm_healthy():
+                self._report(step="5/6 案例拆解", message="开始拆解案例…", progress=progress)
                 try:
                     result["cases"] = self._collect_cases(
                         cfg.get("phrase_sources", []), case_count, progress)
@@ -199,8 +220,9 @@ class Pipeline:
                     log.exception("案例搜集异常")
                     result["errors"].append(f"案例搜集失败：{e}")
 
-            # 4) 范文候选：按节奏抓取（仅当天，不进补拉）
+            # 4) 范文轮转：每天一篇（仅当天）
             if target == today_str() and self._llm_healthy():
+                self._report(step="6/6 范文解析", message="解析本地范文…", progress=progress)
                 self._maybe_fetch_fanwen(cfg, progress, result)
 
             # 5) 更新 last_update_date：只有真正生成了内容才推进，
@@ -217,6 +239,21 @@ class Pipeline:
         finally:
             self._running = False
             self._llm_fail_count = 0  # 本轮结束重置熔断计数
+            # 最终状态：被熔断停止则保留 stopped，否则完成
+            if result.get("stopped_reason"):
+                pass  # 已在熔断点写入 stopped 状态
+            elif result["ok"] and not result.get("errors"):
+                self.store.set_pipeline_status(state="done", step="完成",
+                                               message=f"生成完成：热点{result['hotspots']} 卡{result['cards']} 语段{result['phrases']}",
+                                               done=6, total=6)
+            elif result.get("errors") and (result["hotspots"] + result["cards"] +
+                                           result["phrases"] + result["expressions"] + result["cases"]) > 0:
+                self.store.set_pipeline_status(state="partial", step="部分完成",
+                                               message="部分任务完成，部分失败（见日志）", done=6, total=6)
+            else:
+                self.store.set_pipeline_status(state="failed", step="失败",
+                                               message="；".join(result.get("errors", ["未知错误"])[:2]),
+                                               done=0, total=6)
 
     def _collect_phrases(self, sources: list[dict], limit: int, progress=None) -> int:
         """从素材页抓候选语段 → 与库内去重 → AI 改稿 → 写草稿。返回新增条数。"""

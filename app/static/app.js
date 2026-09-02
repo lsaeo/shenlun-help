@@ -1082,35 +1082,99 @@ async function applyFonts() {
   } catch (e) { /* ignore */ }
 }
 
-/* ================= 流水线 ================= */
+/* ================= 流水线（异步 + 进度） ================= */
+let _ppTimer = null;
+let _ppStart = 0;
+
+function ppShow() {
+  const el = $("#pipeline-progress");
+  el.classList.remove("hidden");
+  _ppStart = Date.now();
+}
+function ppHide() {
+  const el = $("#pipeline-progress");
+  el.classList.add("hidden");
+  if (_ppTimer) { clearInterval(_ppTimer); _ppTimer = null; }
+}
+function ppRender(st) {
+  const step = st.step || "";
+  const msg = st.message || "";
+  const done = st.done || 0, total = st.total || 0;
+  $("#pp-step").textContent = step;
+  $("#pp-msg").textContent = msg;
+  const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+  $("#pp-bar").style.width = pct + "%";
+  const secs = Math.round((Date.now() - _ppStart) / 1000);
+  $("#pp-time").textContent = `⏱ ${Math.floor(secs / 60)}分${secs % 60}秒`;
+  // 熔断/失败 → 显示重跑按钮
+  const acts = $("#pp-actions");
+  if (st.state === "stopped" || st.state === "failed") {
+    acts.innerHTML = `
+      <div class="pp-warn">⚠️ ${st.state === "stopped" ? "API 不可用，流水线已停止" : "流水线失败"}</div>
+      <div class="pp-warn-msg">${esc(st.message || "")}</div>
+      <button class="btn accent" id="pp-go-settings">⚙️ 去设置换 API</button>
+      <button class="btn primary" id="pp-rerun">🔄 重跑全部任务</button>`;
+    $("#pp-go-settings").addEventListener("click", () => { switchTab("settings"); ppHide(); });
+    $("#pp-rerun").addEventListener("click", () => { ppHide(); runPipelineNow(); });
+  } else if (st.state === "done" || st.state === "partial") {
+    acts.innerHTML = `<div class="pp-ok">✅ ${st.state === "done" ? "全部完成" : "部分完成"}：${esc(st.message || "")}</div>
+      <button class="btn small" id="pp-close">关闭</button>`;
+    $("#pp-close").addEventListener("click", async () => {
+      ppHide();
+      await api("/api/pipeline/reset-status", { method: "POST" });
+    });
+  }
+}
+async function pollPipelineStatus() {
+  const st = await api("/api/pipeline/status");
+  if (st.state === "running") {
+    ppShow();
+    ppRender(st);
+    _ppTimer = setInterval(async () => {
+      try {
+        const s2 = await api("/api/pipeline/status");
+        ppRender(s2);
+        if (s2.state !== "running") {
+          clearInterval(_ppTimer); _ppTimer = null;
+          await refreshOverview();
+          loadHotspots(); loadCards();
+        }
+      } catch (e) { /* ignore */ }
+    }, 1500);
+  } else if (st.state === "stopped" || st.state === "failed") {
+    ppShow();
+    ppRender(st);
+  }
+}
 async function runPipelineNow() {
-  const btn = $("#hs-run");
-  btn.disabled = true;
-  btn.textContent = "⏳ 生成中（约 1-3 分钟）…";
-  toast("开始生成今日内容，请耐心等待…");
   try {
-    const r = await api("/api/pipeline/run", { method: "POST" });
-    if (r.ok) toast(`已生成：热点 ${r.hotspots} 条 / 话题卡 ${r.cards} 张 / 语段 ${r.phrases} 条（待审核）`);
-    else toast("生成部分失败：" + (r.errors || []).join("；").slice(0, 80));
+    await api("/api/pipeline/run", { method: "POST" });
+    toast("流水线已启动，可在下方看实时进度");
+    ppShow();
+    ppRender({ state: "running", step: "启动中", message: "正在准备…", done: 0, total: 6 });
+    _ppTimer = setInterval(async () => {
+      try {
+        const st = await api("/api/pipeline/status");
+        ppRender(st);
+        if (st.state !== "running") {
+          clearInterval(_ppTimer); _ppTimer = null;
+          await refreshOverview();
+          loadHotspots(); loadCards();
+        }
+      } catch (e) { /* ignore */ }
+    }, 1500);
   } catch (e) {
-    toast("生成失败：" + e.message);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = "⚡ 立即生成今日";
-    await loadHotspots();
-    await loadCards();
-    refreshOverview();
+    toast("启动失败：" + e.message);
+    ppHide();
   }
 }
 async function runCatchup() {
-  toast("开始补拉缺失天数…");
   try {
-    const r = await api("/api/pipeline/catchup", { method: "POST" });
-    toast(`补拉完成：${(r.caught_up || []).join(", ") || "无缺失"}`);
+    await api("/api/pipeline/catchup", { method: "POST" });
+    toast("补拉已启动");
   } catch (e) {
     toast("补拉失败：" + e.message);
   }
-  refreshOverview();
 }
 
 /* ================= 一键入库 ================= */
@@ -1264,6 +1328,7 @@ function bindEvents() {
   // 设置
   $("#cfg-save").addEventListener("click", saveSettings);
   $("#cfg-catch-run").addEventListener("click", runCatchup);
+  $("#cfg-rerun").addEventListener("click", () => { switchTab("hotspots"); runPipelineNow(); });
 
   // 弹窗
   $("#modal-close").addEventListener("click", hideModal);
@@ -1298,5 +1363,6 @@ function debounce(fn, ms) {
   await loadReviewState();
   await refreshOverview();
   switchTab("hotspots");
+  pollPipelineStatus();  // 恢复遗留的 running/stopped 状态（重启后仍显示）
   setInterval(refreshOverview, 30000);
 })();

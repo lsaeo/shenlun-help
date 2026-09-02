@@ -148,6 +148,7 @@ class JsonStore:
             "review": os.path.join(data_dir, "review.json"),
             "fanwen": os.path.join(data_dir, "fanwen.json"),
             "fanwen_index": os.path.join(data_dir, "fanwen_index.json"),
+            "pipeline_status": os.path.join(data_dir, "pipeline_status.json"),
         }
         self._cache: dict[str, object] = {}
         self._seed_dir = seed_dir
@@ -193,6 +194,8 @@ class JsonStore:
                 self._cache["fanwen_index"] = {"articles": []}
             elif "articles" not in self._cache["fanwen_index"]:
                 self._cache["fanwen_index"]["articles"] = []
+            if not isinstance(self._cache["pipeline_status"], dict):
+                self._cache["pipeline_status"] = {"state": "idle"}
             self._save_all()
 
     def _load_seed(self, name: str):
@@ -560,6 +563,19 @@ class JsonStore:
                 it = self.get(r["type"], r["item_id"])
                 enriched.append({**r, "content": it})
             return enriched
+
+    # ---------- 流水线任务状态（异步进度/熔断） ----------
+
+    def pipeline_status(self) -> dict:
+        with self._lock:
+            return copy.deepcopy(self._cache["pipeline_status"])
+
+    def set_pipeline_status(self, **kwargs):
+        """更新流水线状态（原子写）。字段：state/step/progress/error/stopped_reason/job_id…"""
+        with self._lock:
+            self._cache["pipeline_status"].update(kwargs)
+            self._cache["pipeline_status"]["updated_at"] = datetime.now().isoformat(timespec="seconds")
+            self._save("pipeline_status")
 
     # ---------- 概览 ----------
 

@@ -259,6 +259,22 @@ select, input[type="date"], input[type="time"], input[type="number"] {
 .settings-card .row { display: flex; gap: 10px; margin-top: 8px; }
 .hint { margin-top: 12px; font-size: 12px; color: var(--muted); }
 
+/* 流水线进度条 */
+.pipeline-progress {
+  background: #fff; border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 12px 16px; margin-bottom: 14px; box-shadow: var(--shadow);
+}
+.pp-top { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+.pp-step { font-weight: 700; color: var(--primary); font-size: 13px; }
+.pp-msg { font-size: 13px; color: var(--text); flex: 1; }
+.pp-time { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.pp-bar { height: 8px; background: #e8edf5; border-radius: 4px; overflow: hidden; }
+.pp-bar-fill { height: 100%; background: var(--primary); border-radius: 4px; transition: width .4s; width: 0; }
+.pp-actions { margin-top: 10px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.pp-warn { color: var(--danger); font-weight: 700; }
+.pp-warn-msg { font-size: 12px; color: var(--muted); width: 100%; }
+.pp-ok { color: var(--ok); font-weight: 600; }
+
 /* 范文轮转 */
 .fanwen-stats {
   background: #eef6ff; border: 1px solid #c9d9fb; border-radius: 8px;

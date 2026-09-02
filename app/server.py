@@ -393,26 +393,35 @@ def create_app(store: JsonStore, pipeline: Pipeline) -> FastAPI:
     def put_config(body: GenericBody):
         return store.set_config(body.data)
 
-    # ---------- 流水线 ----------
+    # ---------- 流水线（异步任务，前端轮询状态） ----------
     @app.post("/api/pipeline/run")
     def run_pipeline():
+        """异步启动流水线：立即返回，进度经 /api/pipeline/status 查询。"""
         if pipeline.running:
             raise HTTPException(409, "流水线正在运行")
-        result = {}
-        def _run():
-            nonlocal result
-            result = pipeline.run_daily()
-        t = threading.Thread(target=_run, daemon=True)
-        t.start()
-        t.join(timeout=600)
-        return result
+        store.set_pipeline_status(state="running", step="启动中", message="流水线已启动", done=0, total=6)
+        threading.Thread(target=pipeline.run_daily, daemon=True).start()
+        return {"started": True}
 
     @app.post("/api/pipeline/catchup")
     def catchup():
+        """异步补拉。"""
         if pipeline.running:
             raise HTTPException(409, "流水线正在运行")
-        result = pipeline.run_catchup()
-        return result
+        store.set_pipeline_status(state="running", step="补拉中", message="补拉缺失天数", done=0, total=6)
+        threading.Thread(target=pipeline.run_catchup, daemon=True).start()
+        return {"started": True}
+
+    @app.get("/api/pipeline/status")
+    def pipeline_status():
+        """查询流水线进度/状态（前端轮询）。"""
+        return store.pipeline_status()
+
+    @app.post("/api/pipeline/reset-status")
+    def pipeline_reset_status():
+        """重置状态为 idle（前端关掉进度条后调用）。"""
+        store.set_pipeline_status(state="idle", step="", message="", done=0, total=0)
+        return {"ok": True}
 
     # 静态托管必须最后挂载
     if STATIC_DIR.exists():
